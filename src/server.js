@@ -93,10 +93,10 @@ async function bootstrap() {
   app.use("/api/admin", adminRouter);
   app.use(createRoutes({ onQueueChanged }));
 
-  const { port: httpPort } = await listenHttpWithFallback(app, config.port);
+  const { port: httpPort } = await listenHttpWithFallback(app, config.port, 0);
   console.log(`HTTP server running on http://localhost:${httpPort}`);
 
-  const legacyProxyPort = Number(process.env.LEGACY_PROXY_PORT || 8080);
+  const legacyProxyPort = Number(process.env.LEGACY_PROXY_PORT || 0);
   if (legacyProxyPort && legacyProxyPort !== httpPort) {
     try {
       await listenHttpWithFallback(app, legacyProxyPort, 0);
@@ -106,7 +106,7 @@ async function bootstrap() {
     }
   }
 
-  const wsPort = await startWsWithFallback(config.wsPort);
+  const wsPort = await startWsWithFallback(config.wsPort, 0);
   console.log(`WebSocket server running on ws://localhost:${wsPort}`);
 }
 
