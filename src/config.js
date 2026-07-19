@@ -41,7 +41,7 @@ export const config = {
   jwtSecret: process.env.JWT_SECRET || "panda-print-default-secret-change-in-prod-2026",
   publicBaseUrl,
   webBaseUrl: String(process.env.WEB_BASE_URL || "https://print-panda.me").replace(/\/+$/, ""),
-  payPandaApiBase: process.env.PAY_PANDA_API_BASE || "https://metatronhost.in/pay-panda/api",
+  payPandaApiBase: String(process.env.PAY_PANDA_API_BASE || "https://git-pipeline.metatronhost.in/pay-panda/api").replace(/\/+$/, ""),
   payPandaAppId,
   payPandaAppSecret,
   payPandaRedirectUrl
