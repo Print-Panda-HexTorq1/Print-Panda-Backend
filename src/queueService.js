@@ -227,7 +227,7 @@ function normalizeAnalyticsRow(row) {
 
 export async function getAnalytics(clientId = null, range = "all", options = {}) {
   const db = getDb();
-  const clauses = [];
+  const clauses = ["COALESCE(j.is_archived, 0) = 0", "j.status != 'draft_upload'"];
   const args = [];
   const userId = Number(options?.userId || 0);
   const exactDate = String(options?.date || "").trim();

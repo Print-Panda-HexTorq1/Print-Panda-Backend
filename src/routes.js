@@ -328,6 +328,42 @@ export function createRoutes({ onQueueChanged }) {
       && Number(job.assigned_user_id) === Number(reqUser.userId);
   }
 
+  async function getPublicUploadUser(userUid) {
+    const db = getDb();
+    return db.get(
+      `SELECT
+         u.id AS user_id,
+         u.username AS username,
+         u.client_id AS user_client_id,
+         c.id AS client_id,
+         c.shop_name AS shop_name,
+         c.client_uid AS client_uid,
+         c.upi_id AS upi_id,
+         c.upi_name AS upi_name,
+         c.bw_price AS bw_price,
+         c.color_price AS color_price,
+         c.auto_payment_enabled AS auto_payment_enabled
+       FROM users u
+       JOIN clients c ON c.id = u.client_id
+       WHERE u.user_uid = ?`,
+      [userUid]
+    );
+  }
+
+  async function getUserDraftJob(userUid, jobId) {
+    const db = getDb();
+    return db.get(
+      `SELECT j.*, u.user_uid
+       FROM jobs j
+       JOIN users u ON u.id = j.assigned_user_id
+       WHERE j.id = ?
+         AND u.user_uid = ?
+         AND j.status = 'draft_upload'
+         AND COALESCE(j.is_archived, 0) = 0`,
+      [jobId, userUid]
+    );
+  }
+
   function getStageFromStatus(status) {
     const value = String(status || "").toLowerCase();
     switch (value) {
@@ -526,6 +562,151 @@ export function createRoutes({ onQueueChanged }) {
   });
 
   // ── Per-client customer upload (public) ────────────────────────────────────
+  router.post("/api/u/:userUid/jobs/draft-upload", upload.single("document"), async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "Document is required" });
+      }
+      const user = await getPublicUploadUser(req.params.userUid);
+      if (!user) {
+        fs.unlink(req.file.path, () => {});
+        return res.status(404).json({ error: "User upload link not found" });
+      }
+      const resolvedClientId = Number(user.client_id || user.user_client_id || 0);
+      const resolvedUserId = Number(user.user_id || 0);
+      if (!resolvedClientId || !resolvedUserId) {
+        fs.unlink(req.file.path, () => {});
+        return res.status(400).json({ error: "Invalid user/shop mapping for this upload link" });
+      }
+
+      const now = nowIso();
+      const pageCount = await detectPageCount(req.file.path);
+      const insertResult = await getDb().run(
+        `INSERT INTO jobs (
+          client_id, assigned_user_id, customer_name, original_name, stored_name, file_path,
+          page_count, copies, color_mode, page_selection, orientation, paper_size, duplex,
+          unit_price, total_price, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          resolvedClientId,
+          resolvedUserId,
+          "Guest",
+          req.file.originalname,
+          req.file.filename,
+          req.file.path,
+          pageCount,
+          1,
+          "bw",
+          "all",
+          "portrait",
+          "A4",
+          0,
+          0,
+          0,
+          "draft_upload",
+          now,
+          now
+        ]
+      );
+
+      await addJobStatusHistory(insertResult.lastID, "draft_upload", "upload", now);
+      return res.status(201).json({
+        draft: {
+          id: insertResult.lastID,
+          originalName: req.file.originalname,
+          pageCount
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/api/u/:userUid/jobs/draft-upload/:jobId", async (req, res, next) => {
+    try {
+      const job = await getUserDraftJob(req.params.userUid, req.params.jobId);
+      if (!job) {
+        return res.status(404).json({ error: "Draft upload not found" });
+      }
+      if (job.file_path) {
+        fs.unlink(job.file_path, () => {});
+      }
+      await getDb().run("UPDATE jobs SET is_archived = 1, updated_at = ? WHERE id = ?", [nowIso(), job.id]);
+      return res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/api/u/:userUid/jobs/draft-upload/:jobId/finalize", async (req, res, next) => {
+    try {
+      const user = await getPublicUploadUser(req.params.userUid);
+      const job = await getUserDraftJob(req.params.userUid, req.params.jobId);
+      if (!user || !job) {
+        return res.status(404).json({ error: "Draft upload not found" });
+      }
+
+      const copies = safeInt(req.body.copies, 1);
+      const colorMode = req.body.colorMode === "color" ? "color" : "bw";
+      const pageSelection = req.body.pageSelection || "all";
+      const effectivePageCount = countSelectedPages(pageSelection, job.page_count);
+      const clientBwPrice = Number(user.bw_price);
+      const clientColorPrice = Number(user.color_price);
+      const { unitPrice, totalPrice } = calculateTotalPrice({
+        colorMode,
+        copies,
+        pageCount: effectivePageCount,
+        bwPrice: Number.isFinite(clientBwPrice) ? clientBwPrice : config.defaultBwPrice,
+        colorPrice: Number.isFinite(clientColorPrice) ? clientColorPrice : config.defaultColorPrice
+      });
+      const now = nowIso();
+
+      await getDb().run(
+        `UPDATE jobs
+         SET customer_name = ?, copies = ?, color_mode = ?, page_selection = ?, orientation = ?,
+             paper_size = ?, duplex = ?, unit_price = ?, total_price = ?, status = ?,
+             queue_token = ?, updated_at = ?
+         WHERE id = ?`,
+        [
+          req.body.customerName || "Guest",
+          copies,
+          colorMode,
+          pageSelection,
+          req.body.orientation || "portrait",
+          req.body.paperSize || "A4",
+          toBooleanInt(req.body.duplex),
+          unitPrice,
+          totalPrice,
+          "payment_pending",
+          await createQueueToken(getDb(), now, job.id),
+          now,
+          job.id
+        ]
+      );
+      await addJobStatusHistory(job.id, "payment_pending", "upload", now);
+
+      const finalizedJob = await getJobById(job.id);
+      const payment = await attachPaymentToJob({
+        job: finalizedJob,
+        amount: totalPrice,
+        customerName: req.body.customerName || "Guest",
+        customerMobile: req.body.customerMobile || "",
+        fallbackUpiId: user.upi_id,
+        fallbackUpiName: user.upi_name
+      });
+      onQueueChanged();
+
+      return res.status(201).json({
+        job: finalizedJob,
+        shopName: user.shop_name,
+        assignedOperator: user.username,
+        payment
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/api/u/:userUid/jobs/upload", upload.single("document"), async (req, res, next) => {
     try {
       if (!req.file) {
