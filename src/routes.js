@@ -367,7 +367,7 @@ export function createRoutes({ onQueueChanged }) {
     try {
       const db = getDb();
       const client = await db.get(
-        "SELECT id, auto_payment_enabled FROM clients WHERE id = ?",
+        "SELECT id, auto_payment_enabled, bw_price, color_price FROM clients WHERE id = ?",
         [req.user.clientId]
       );
       if (!client) {
@@ -375,6 +375,8 @@ export function createRoutes({ onQueueChanged }) {
       }
       res.json({
         autoPaymentEnabled: Boolean(Number(client.auto_payment_enabled ?? 1)),
+        bwPrice: Number.isFinite(Number(client.bw_price)) ? Number(client.bw_price) : Number(config.defaultBwPrice),
+        colorPrice: Number.isFinite(Number(client.color_price)) ? Number(client.color_price) : Number(config.defaultColorPrice),
         payPandaConfigured: isPayPandaConfigured()
       });
     } catch (error) {
@@ -384,15 +386,43 @@ export function createRoutes({ onQueueChanged }) {
 
   router.patch("/api/shop/settings", requireUser, async (req, res, next) => {
     try {
-      const nextAutoPayment = req.body?.autoPaymentEnabled === false ? 0 : 1;
       const db = getDb();
+      const client = await db.get(
+        "SELECT id, auto_payment_enabled, bw_price, color_price FROM clients WHERE id = ?",
+        [req.user.clientId]
+      );
+      if (!client) {
+        return res.status(404).json({ error: "Shop not found" });
+      }
+
+      const nextAutoPayment = typeof req.body?.autoPaymentEnabled === "boolean"
+        ? (req.body.autoPaymentEnabled ? 1 : 0)
+        : Number(client.auto_payment_enabled ?? 1);
+      const rawBwPrice = req.body?.bwPrice;
+      const rawColorPrice = req.body?.colorPrice;
+      const nextBwPrice = rawBwPrice === undefined
+        ? Number(client.bw_price || config.defaultBwPrice)
+        : Number(rawBwPrice);
+      const nextColorPrice = rawColorPrice === undefined
+        ? Number(client.color_price || config.defaultColorPrice)
+        : Number(rawColorPrice);
+
+      if (!Number.isFinite(nextBwPrice) || nextBwPrice < 0) {
+        return res.status(400).json({ error: "Invalid B/W price" });
+      }
+      if (!Number.isFinite(nextColorPrice) || nextColorPrice < 0) {
+        return res.status(400).json({ error: "Invalid color price" });
+      }
+
       await db.run(
-        "UPDATE clients SET auto_payment_enabled = ? WHERE id = ?",
-        [nextAutoPayment, req.user.clientId]
+        "UPDATE clients SET auto_payment_enabled = ?, bw_price = ?, color_price = ? WHERE id = ?",
+        [nextAutoPayment, Math.round(nextBwPrice), Math.round(nextColorPrice), req.user.clientId]
       );
       res.json({
         ok: true,
         autoPaymentEnabled: Boolean(nextAutoPayment),
+        bwPrice: Math.round(nextBwPrice),
+        colorPrice: Math.round(nextColorPrice),
         payPandaConfigured: isPayPandaConfigured()
       });
     } catch (error) {
