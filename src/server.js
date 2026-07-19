@@ -70,12 +70,18 @@ async function bootstrap() {
   await initDb();
 
   const app = express();
-  const allowedOrigins = String(config.corsOrigin || "*")
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
-  const corsOrigin = allowedOrigins.includes("*") ? true : allowedOrigins;
-  app.use(cors({ origin: corsOrigin }));
+  app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+    optionsSuccessStatus: 204
+  }));
+  app.options("*", cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+    optionsSuccessStatus: 204
+  }));
   app.use(express.json());
   app.use(morgan("dev"));
 
