@@ -96,6 +96,16 @@ async function bootstrap() {
   const { port: httpPort } = await listenHttpWithFallback(app, config.port);
   console.log(`HTTP server running on http://localhost:${httpPort}`);
 
+  const legacyProxyPort = Number(process.env.LEGACY_PROXY_PORT || 8080);
+  if (legacyProxyPort && legacyProxyPort !== httpPort) {
+    try {
+      await listenHttpWithFallback(app, legacyProxyPort, 0);
+      console.log(`HTTP compatibility listener running on http://localhost:${legacyProxyPort}`);
+    } catch (error) {
+      console.warn(`HTTP compatibility listener skipped on ${legacyProxyPort}: ${error?.message || error}`);
+    }
+  }
+
   const wsPort = await startWsWithFallback(config.wsPort);
   console.log(`WebSocket server running on ws://localhost:${wsPort}`);
 }
