@@ -278,6 +278,11 @@ export async function getAnalytics(clientId = null, range = "all", options = {})
        j.original_name,
        j.status,
        j.total_price,
+       j.unit_price,
+       j.page_count,
+       j.page_selection,
+       j.copies,
+       j.color_mode,
        j.payment_provider,
        j.payment_verified_at,
        j.payment_verification_mode,
@@ -365,7 +370,21 @@ export async function getAnalytics(clientId = null, range = "all", options = {})
       day: row.day || "",
       ...normalizeAnalyticsRow(row)
     })),
-    recentLogs
+    recentLogs: recentLogs.map((row) => {
+      const copies = Math.max(1, Number(row.copies || 1));
+      const selectedPagesPerCopy = countSelectedPages(row.page_selection, Number(row.page_count || 1));
+      return {
+        ...row,
+        copies,
+        unit_price: Number(row.unit_price || 0),
+        page_count: Number(row.page_count || 0),
+        page_selection: row.page_selection || "all",
+        selected_pages_per_copy: selectedPagesPerCopy,
+        effective_pages: Math.max(1, selectedPagesPerCopy * copies),
+        color_mode: row.color_mode || "bw",
+        total_price: Number(row.total_price || 0)
+      };
+    })
   };
 }
 
