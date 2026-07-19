@@ -72,7 +72,7 @@ function makePayPandaOrderId(jobId) {
 }
 
 function getPayPandaRedirectUrl() {
-  return config.payPandaRedirectUrl || `${config.publicBaseUrl}/api/pay-panda/callback`;
+  return config.payPandaRedirectUrl;
 }
 
 function normalizePayPandaStatus(value) {
@@ -89,6 +89,16 @@ function getVerificationPaymentId(verification = {}) {
 
 function getVerificationBankRrn(verification = {}) {
   return verification.bankRrn || verification.bank_rrn || verification.rrn || "";
+}
+
+function firstStringValue(source = {}, keys = []) {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (value != null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "";
 }
 
 async function attachPaymentToJob({ job, amount, customerName, customerMobile, fallbackUpiId, fallbackUpiName }) {
@@ -975,12 +985,27 @@ export function createRoutes({ onQueueChanged }) {
     }
   });
 
-  router.get("/api/pay-panda/callback", async (req, res, next) => {
+  async function handlePayPandaCallback(req, res) {
+    let callbackJob = null;
     try {
       const db = getDb();
-      const paymentId = String(req.query.pay_panda_payment_id || req.query.payment_id || "").trim();
-      const orderId = String(req.query.order_id || "").trim();
-      const redirectedStatus = String(req.query.status || "").trim();
+      const input = { ...(req.query || {}), ...(req.body || {}) };
+      const paymentId = firstStringValue(input, [
+        "pay_panda_payment_id",
+        "payment_id",
+        "paymentId",
+        "payPandaPaymentId",
+        "id"
+      ]);
+      const orderId = firstStringValue(input, [
+        "order_id",
+        "orderId",
+        "merchant_order_id",
+        "merchantOrderId",
+        "reference_id",
+        "referenceId"
+      ]);
+      const redirectedStatus = firstStringValue(input, ["status", "payment_status", "paymentStatus"]);
       const job = await db.get(
         `SELECT j.*, c.auto_payment_enabled AS auto_payment_enabled, u.user_uid AS user_uid
          FROM jobs j
@@ -992,8 +1017,12 @@ export function createRoutes({ onQueueChanged }) {
          LIMIT 1`,
         [orderId, orderId, paymentId, paymentId]
       );
+      callbackJob = job;
       if (!job) {
         const target = `${config.webBaseUrl}/?payment=missing`;
+        if (req.method === "POST") {
+          return res.status(404).json({ error: "Payment job not found" });
+        }
         return res.redirect(target);
       }
 
@@ -1013,6 +1042,9 @@ export function createRoutes({ onQueueChanged }) {
         jobId: String(updated.id),
         token: String(updated.queue_token || `PP-${updated.id}`)
       });
+      if (req.method === "POST") {
+        return res.json({ ok: true, job: updated });
+      }
       return res.redirect(`${config.webBaseUrl}${targetPath}?${params.toString()}`);
     } catch (error) {
       console.error("Pay-Panda callback verification failed", error);
@@ -1020,9 +1052,20 @@ export function createRoutes({ onQueueChanged }) {
         payment: "failed",
         reason: String(error?.message || "verification_failed").slice(0, 120)
       });
-      return res.redirect(`${config.webBaseUrl}/?${params.toString()}`);
+      if (req.method === "POST") {
+        return res.status(error?.statusCode || 500).json({ error: error?.message || "verification_failed" });
+      }
+      const targetPath = callbackJob?.user_uid ? `/u/${encodeURIComponent(callbackJob.user_uid)}` : "/";
+      if (callbackJob?.id) {
+        params.set("jobId", String(callbackJob.id));
+        params.set("token", String(callbackJob.queue_token || `PP-${callbackJob.id}`));
+      }
+      return res.redirect(`${config.webBaseUrl}${targetPath}?${params.toString()}`);
     }
-  });
+  }
+
+  router.get("/api/pay-panda/callback", handlePayPandaCallback);
+  router.post("/api/pay-panda/callback", handlePayPandaCallback);
 
   async function verifyPaymentForJob(job, actor = null, input = {}) {
     if (String(job.payment_provider || "upi") !== "pay_panda") {
