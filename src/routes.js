@@ -104,22 +104,29 @@ function firstStringValue(source = {}, keys = []) {
 async function attachPaymentToJob({ job, amount, customerName, customerMobile, fallbackUpiId, fallbackUpiName }) {
   const db = getDb();
   const orderId = makePayPandaOrderId(job.id);
+  const autoPaymentEnabled = Boolean(Number(job.auto_payment_enabled ?? 1));
   const fallbackPayment = {
     provider: "upi",
     amount,
     upiId: fallbackUpiId || config.upiId,
     upiLink: upiLink(job.id, amount, fallbackUpiId, fallbackUpiName),
-    autoPaymentEnabled: Boolean(Number(job.auto_payment_enabled ?? 1)),
+    autoPaymentEnabled,
     autoVerificationAvailable: false
   };
 
-  const payPanda = getPayPandaClient();
-  if (!payPanda) {
+  if (!autoPaymentEnabled) {
     await db.run(
       "UPDATE jobs SET payment_provider = 'upi', payment_order_id = ?, updated_at = ? WHERE id = ?",
       [orderId, nowIso(), job.id]
     );
     return fallbackPayment;
+  }
+
+  const payPanda = getPayPandaClient();
+  if (!payPanda) {
+    const error = new Error("Pay-Panda keys are not configured on the backend");
+    error.statusCode = 503;
+    throw error;
   }
 
   try {
@@ -162,12 +169,9 @@ async function attachPaymentToJob({ job, amount, customerName, customerMobile, f
       status: payment.status || "PENDING"
     };
   } catch (error) {
-    console.error("Pay-Panda checkout creation failed; falling back to UPI", error);
-    await db.run(
-      "UPDATE jobs SET payment_provider = 'upi', payment_order_id = ?, updated_at = ? WHERE id = ?",
-      [orderId, nowIso(), job.id]
-    );
-    return fallbackPayment;
+    console.error("Pay-Panda checkout creation failed", error);
+    error.statusCode = error.statusCode || 502;
+    throw error;
   }
 }
 

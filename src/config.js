@@ -8,6 +8,20 @@ const __dirname = path.dirname(__filename);
 const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || "https://git-pipeline.metatronhost.in/print-panda").replace(/\/+$/, "");
 const payPandaRedirectUrl = String(process.env.PAY_PANDA_REDIRECT_URL || "").trim()
   || `${publicBaseUrl}/api/pay-panda/callback`;
+const payPandaAppId = String(
+  process.env.PAY_PANDA_APP_ID
+  || process.env.PAYPANDA_APP_ID
+  || process.env.PAY_PANDA_CLIENT_ID
+  || process.env.PAYPANDA_CLIENT_ID
+  || ""
+).trim();
+const payPandaAppSecret = String(
+  process.env.PAY_PANDA_APP_SECRET
+  || process.env.PAYPANDA_APP_SECRET
+  || process.env.PAY_PANDA_CLIENT_SECRET
+  || process.env.PAYPANDA_CLIENT_SECRET
+  || ""
+).trim();
 
 export const config = {
   port: Number(process.env.PRINT_PANDA_PORT || process.env.HTTP_PORT || 17005),
@@ -26,7 +40,7 @@ export const config = {
   publicBaseUrl,
   webBaseUrl: String(process.env.WEB_BASE_URL || "https://print-panda.me").replace(/\/+$/, ""),
   payPandaApiBase: process.env.PAY_PANDA_API_BASE || "https://metatronhost.in/pay-panda/api",
-  payPandaAppId: process.env.PAY_PANDA_APP_ID || "",
-  payPandaAppSecret: process.env.PAY_PANDA_APP_SECRET || "",
+  payPandaAppId,
+  payPandaAppSecret,
   payPandaRedirectUrl
 };
