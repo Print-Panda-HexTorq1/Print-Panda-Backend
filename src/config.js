@@ -24,7 +24,7 @@ const payPandaAppSecret = String(
 ).trim();
 
 export const config = {
-  port: Number(process.env.PRINT_PANDA_PORT || process.env.HTTP_PORT || 17005),
+  port: Number(process.env.PRINT_PANDA_PORT || process.env.HTTP_PORT || process.env.PORT || 17005),
   wsPort: Number(process.env.PRINT_PANDA_WS_PORT || process.env.WS_PORT || 17006),
   corsOrigin: process.env.CORS_ORIGIN || "*",
   uploadsDir: path.resolve(__dirname, "../storage/uploads"),
