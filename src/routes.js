@@ -1339,6 +1339,7 @@ export function createRoutes({ onQueueChanged }) {
       const percent = totalPages > 0
         ? Math.max(0, Math.min(100, Math.round((pagesPrinted / totalPages) * 100)))
         : 0;
+      const serverFileAvailable = Boolean(job.file_path && fs.existsSync(job.file_path));
 
       res.json({
         job,
@@ -1354,6 +1355,12 @@ export function createRoutes({ onQueueChanged }) {
           totalPages,
           percent,
           updatedAt: job.print_progress_updated_at || null
+        },
+        documentRetention: {
+          downloadedByShop: Boolean(Number(job.downloaded_by_desktop || 0)),
+          serverFileAvailable,
+          serverFileDeleted: Boolean(job.file_path && !serverFileAvailable),
+          retentionMinutes: Number(config.retentionMinutes || 0)
         }
       });
     } catch (error) {
