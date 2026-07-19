@@ -212,26 +212,49 @@ function getRangeStartIso(range = "all") {
   return null;
 }
 
-export async function getAnalytics(clientId = null, range = "all") {
+function normalizeAnalyticsRow(row) {
+  return {
+    totalJobs: Number(row?.total_jobs || 0),
+    printedJobs: Number(row?.printed_jobs || 0),
+    failedJobs: Number(row?.failed_jobs || 0),
+    pendingJobs: Number(row?.pending_jobs || 0),
+    totalPages: Number(row?.total_pages || 0),
+    revenuePrinted: Number(row?.revenue_printed || 0),
+    colorJobs: Number(row?.color_jobs || 0),
+    bwJobs: Number(row?.bw_jobs || 0)
+  };
+}
+
+export async function getAnalytics(clientId = null, range = "all", options = {}) {
   const db = getDb();
   const clauses = [];
   const args = [];
+  const userId = Number(options?.userId || 0);
+  const exactDate = String(options?.date || "").trim();
 
   if (clientId) {
     clauses.push("j.client_id = ?");
     args.push(clientId);
   }
 
-  const rangeStartIso = getRangeStartIso(range);
-  if (rangeStartIso) {
+  if (Number.isFinite(userId) && userId > 0) {
+    clauses.push("j.assigned_user_id = ?");
+    args.push(userId);
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(exactDate)) {
+    clauses.push("substr(j.updated_at, 1, 10) = ?");
+    args.push(exactDate);
+  } else {
+    const rangeStartIso = getRangeStartIso(range);
+    if (rangeStartIso) {
     clauses.push("datetime(j.updated_at) >= datetime(?)");
     args.push(rangeStartIso);
+    }
   }
 
   const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-
-  const totals = await db.get(
-    `SELECT
+  const aggregateSql = `
        COUNT(*) AS total_jobs,
        SUM(CASE WHEN j.status = 'printed' THEN 1 ELSE 0 END) AS printed_jobs,
        SUM(CASE WHEN j.status = 'print_failed' THEN 1 ELSE 0 END) AS failed_jobs,
@@ -239,7 +262,10 @@ export async function getAnalytics(clientId = null, range = "all") {
        SUM(COALESCE(j.page_count, 0) * COALESCE(j.copies, 1)) AS total_pages,
        SUM(CASE WHEN j.status = 'printed' THEN COALESCE(j.total_price, 0) ELSE 0 END) AS revenue_printed,
        SUM(CASE WHEN j.color_mode = 'color' THEN 1 ELSE 0 END) AS color_jobs,
-       SUM(CASE WHEN j.color_mode = 'bw' THEN 1 ELSE 0 END) AS bw_jobs
+       SUM(CASE WHEN j.color_mode = 'bw' THEN 1 ELSE 0 END) AS bw_jobs`;
+
+  const totals = await db.get(
+    `SELECT ${aggregateSql}
      FROM jobs j
      ${whereSql}`,
     args
@@ -255,28 +281,86 @@ export async function getAnalytics(clientId = null, range = "all") {
        j.updated_at,
        j.printed_at,
        j.client_id,
+       j.assigned_user_id,
+       u.username AS assigned_username,
        COALESCE(c.client_uid, j.printed_by_client_uid) AS client_uid,
        COALESCE(c.shop_name, j.printed_by_shop_name) AS shop_name,
        j.printed_by_user_id,
        j.printed_by_username
      FROM jobs j
      LEFT JOIN clients c ON c.id = j.client_id
+     LEFT JOIN users u ON u.id = j.assigned_user_id
      ${whereSql}
      ORDER BY datetime(j.updated_at) DESC, j.id DESC
      LIMIT 25`,
     args
   );
 
+  const shopSummaries = await db.all(
+    `SELECT
+       j.client_id,
+       COALESCE(c.client_uid, j.printed_by_client_uid) AS client_uid,
+       COALESCE(c.shop_name, j.printed_by_shop_name, 'Unknown Shop') AS shop_name,
+       ${aggregateSql}
+     FROM jobs j
+     LEFT JOIN clients c ON c.id = j.client_id
+     ${whereSql}
+     GROUP BY j.client_id, client_uid, shop_name
+     ORDER BY revenue_printed DESC, total_jobs DESC`,
+    args
+  );
+
+  const userSummaries = await db.all(
+    `SELECT
+       j.client_id,
+       COALESCE(c.client_uid, j.printed_by_client_uid) AS client_uid,
+       COALESCE(c.shop_name, j.printed_by_shop_name, 'Unknown Shop') AS shop_name,
+       j.assigned_user_id AS user_id,
+       COALESCE(u.username, j.printed_by_username, 'Unassigned') AS username,
+       ${aggregateSql}
+     FROM jobs j
+     LEFT JOIN clients c ON c.id = j.client_id
+     LEFT JOIN users u ON u.id = j.assigned_user_id
+     ${whereSql}
+     GROUP BY j.client_id, client_uid, shop_name, j.assigned_user_id, username
+     ORDER BY shop_name ASC, revenue_printed DESC, total_jobs DESC`,
+    args
+  );
+
+  const dailySummaries = await db.all(
+    `SELECT
+       substr(j.updated_at, 1, 10) AS day,
+       ${aggregateSql}
+     FROM jobs j
+     ${whereSql}
+     GROUP BY day
+     ORDER BY day DESC
+     LIMIT 31`,
+    args
+  );
+
   return {
     range,
-    totalJobs: Number(totals?.total_jobs || 0),
-    printedJobs: Number(totals?.printed_jobs || 0),
-    failedJobs: Number(totals?.failed_jobs || 0),
-    pendingJobs: Number(totals?.pending_jobs || 0),
-    totalPages: Number(totals?.total_pages || 0),
-    revenuePrinted: Number(totals?.revenue_printed || 0),
-    colorJobs: Number(totals?.color_jobs || 0),
-    bwJobs: Number(totals?.bw_jobs || 0),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(exactDate) ? exactDate : "",
+    ...normalizeAnalyticsRow(totals),
+    shopSummaries: shopSummaries.map((row) => ({
+      clientId: row.client_id == null ? null : Number(row.client_id),
+      clientUid: row.client_uid || "",
+      shopName: row.shop_name || "Unknown Shop",
+      ...normalizeAnalyticsRow(row)
+    })),
+    userSummaries: userSummaries.map((row) => ({
+      clientId: row.client_id == null ? null : Number(row.client_id),
+      clientUid: row.client_uid || "",
+      shopName: row.shop_name || "Unknown Shop",
+      userId: row.user_id == null ? null : Number(row.user_id),
+      username: row.username || "Unassigned",
+      ...normalizeAnalyticsRow(row)
+    })),
+    dailySummaries: dailySummaries.map((row) => ({
+      day: row.day || "",
+      ...normalizeAnalyticsRow(row)
+    })),
     recentLogs
   };
 }

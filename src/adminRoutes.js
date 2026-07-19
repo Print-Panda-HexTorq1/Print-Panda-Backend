@@ -62,14 +62,24 @@ adminRouter.get("/clients", async (_, res, next) => {
   }
 });
 
-// GET /api/admin/analytics?clientId=123
+// GET /api/admin/analytics?clientId=123&userId=456&range=7d&date=2026-07-19
 adminRouter.get("/analytics", async (req, res, next) => {
   try {
     const raw = req.query?.clientId;
     const clientId = raw ? Number(raw) : null;
+    const rawUser = req.query?.userId;
+    const userId = rawUser ? Number(rawUser) : null;
+    const date = String(req.query?.date || "").trim();
     const rawRange = String(req.query?.range || "all").toLowerCase();
     const range = ["today", "7d", "30d", "all"].includes(rawRange) ? rawRange : "all";
-    const data = await getAnalytics(Number.isFinite(clientId) && clientId > 0 ? clientId : null, range);
+    const data = await getAnalytics(
+      Number.isFinite(clientId) && clientId > 0 ? clientId : null,
+      range,
+      {
+        userId: Number.isFinite(userId) && userId > 0 ? userId : null,
+        date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : ""
+      }
+    );
     return res.json(data);
   } catch (err) {
     next(err);
