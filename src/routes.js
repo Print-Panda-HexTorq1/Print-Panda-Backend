@@ -170,6 +170,9 @@ async function attachPaymentToJob({ job, amount, customerName, customerMobile, f
     };
   } catch (error) {
     console.error("Pay-Panda checkout creation failed", error);
+    if (String(error?.message || "").toLowerCase() === "fetch failed") {
+      error.message = `Cannot reach Pay-Panda API at ${config.payPandaApiBase}`;
+    }
     error.statusCode = error.statusCode || 502;
     throw error;
   }
@@ -678,7 +681,7 @@ export function createRoutes({ onQueueChanged }) {
       await getDb().run(
         `UPDATE jobs
          SET customer_name = ?, copies = ?, color_mode = ?, page_selection = ?, orientation = ?,
-             paper_size = ?, duplex = ?, unit_price = ?, total_price = ?, status = ?,
+             paper_size = ?, duplex = ?, unit_price = ?, total_price = ?,
              queue_token = ?, updated_at = ?
          WHERE id = ?`,
         [
@@ -691,13 +694,11 @@ export function createRoutes({ onQueueChanged }) {
           toBooleanInt(req.body.duplex),
           unitPrice,
           totalPrice,
-          "payment_pending",
           await createQueueToken(getDb(), now, job.id),
           now,
           job.id
         ]
       );
-      await addJobStatusHistory(job.id, "payment_pending", "upload", now);
 
       const finalizedJob = await getJobById(job.id);
       const payment = await attachPaymentToJob({
@@ -708,10 +709,16 @@ export function createRoutes({ onQueueChanged }) {
         fallbackUpiId: user.upi_id,
         fallbackUpiName: user.upi_name
       });
+      await getDb().run(
+        "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+        ["payment_pending", nowIso(), job.id]
+      );
+      await addJobStatusHistory(job.id, "payment_pending", "upload", nowIso());
+      const payableJob = await getJobById(job.id);
       onQueueChanged();
 
       return res.status(201).json({
-        job: finalizedJob,
+        job: payableJob,
         shopName: user.shop_name,
         assignedOperator: user.username,
         payment
@@ -1413,7 +1420,10 @@ export function createRoutes({ onQueueChanged }) {
 
   router.use((error, _, res, __) => {
     console.error(error);
-    res.status(400).json({ error: error.message || "Unexpected error" });
+    const statusCode = Number(error?.statusCode || error?.status || 500);
+    res.status(statusCode >= 400 && statusCode < 600 ? statusCode : 500).json({
+      error: error.message || "Unexpected error"
+    });
   });
 
   return router;
