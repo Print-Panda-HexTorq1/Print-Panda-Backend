@@ -192,12 +192,16 @@ async function verifyPayPandaJob(job, input = {}) {
 async function markPaymentVerified(job, verification = {}, actor = null) {
   const db = getDb();
   const verifiedAt = nowIso();
+  const verificationMode = verification.mode || (Number(job.auto_payment_enabled ?? 1) ? "auto" : "manual");
+  const verifiedBy = actor?.username || verification.verifiedBy || (verificationMode === "auto" ? "Pay-Panda" : "Manual");
   await db.run(
     `UPDATE jobs
      SET pay_panda_payment_id = COALESCE(?, pay_panda_payment_id),
          pay_panda_status = COALESCE(?, pay_panda_status),
          pay_panda_bank_rrn = COALESCE(?, pay_panda_bank_rrn),
          payment_verified_at = ?,
+         payment_verification_mode = ?,
+         payment_verified_by_username = ?,
          updated_at = ?
      WHERE id = ?`,
     [
@@ -205,6 +209,8 @@ async function markPaymentVerified(job, verification = {}, actor = null) {
       verification.status || null,
       verification.bankRrn || null,
       verifiedAt,
+      verificationMode,
+      verifiedBy,
       verifiedAt,
       job.id
     ]
@@ -216,6 +222,30 @@ async function markPaymentVerified(job, verification = {}, actor = null) {
   }
   if (Number(current.auto_payment_enabled ?? 1) && current.status === "paid") {
     current = await updateStatus(job.id, "approved", actor);
+  }
+  return current;
+}
+
+async function markManualPaymentReceived(job, actor = null) {
+  const db = getDb();
+  const verifiedAt = nowIso();
+  await db.run(
+    `UPDATE jobs
+     SET payment_verified_at = COALESCE(payment_verified_at, ?),
+         payment_verification_mode = COALESCE(payment_verification_mode, 'manual'),
+         payment_verified_by_username = COALESCE(NULLIF(payment_verified_by_username, ''), ?),
+         updated_at = ?
+     WHERE id = ?`,
+    [
+      verifiedAt,
+      actor?.username || "Manual",
+      verifiedAt,
+      job.id
+    ]
+  );
+  const current = await getJobById(job.id);
+  if (current.status === "payment_pending") {
+    return updateStatus(job.id, "paid", actor);
   }
   return current;
 }
@@ -815,10 +845,13 @@ export function createRoutes({ onQueueChanged }) {
 
   async function verifyPaymentForJob(job, actor = null, input = {}) {
     if (String(job.payment_provider || "upi") !== "pay_panda") {
-      return updateStatus(job.id, "paid", actor);
+      return markManualPaymentReceived(job, actor);
     }
     const verification = await verifyPayPandaJob(job, input);
-    return markPaymentVerified(job, verification, actor);
+    return markPaymentVerified(job, {
+      ...verification,
+      mode: Number(job.auto_payment_enabled ?? 1) ? "auto" : "manual"
+    }, actor);
   }
 
   router.post("/api/jobs/:id/verify-payment", async (req, res, next) => {
@@ -927,6 +960,9 @@ export function createRoutes({ onQueueChanged }) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const actor = await resolveActorFromHeader(req);
+      if (!job.payment_verified_at) {
+        await markManualPaymentReceived(job, actor);
+      }
       const updated = await updateStatus(req.params.id, "approved", actor);
       onQueueChanged();
       res.json({ ok: true, job: updated });

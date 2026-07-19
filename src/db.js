@@ -78,6 +78,8 @@ export async function initDb() {
       pay_panda_status TEXT,
       pay_panda_bank_rrn TEXT,
       payment_verified_at TEXT,
+      payment_verification_mode TEXT,
+      payment_verified_by_username TEXT NOT NULL DEFAULT '',
       downloaded_by_desktop INTEGER NOT NULL DEFAULT 0,
       is_archived INTEGER NOT NULL DEFAULT 0,
       print_progress_pages INTEGER NOT NULL DEFAULT 0,
@@ -170,6 +172,12 @@ export async function initDb() {
   }
   if (!columns.some((c) => c.name === "payment_verified_at")) {
     await db.exec("ALTER TABLE jobs ADD COLUMN payment_verified_at TEXT");
+  }
+  if (!columns.some((c) => c.name === "payment_verification_mode")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN payment_verification_mode TEXT");
+  }
+  if (!columns.some((c) => c.name === "payment_verified_by_username")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN payment_verified_by_username TEXT NOT NULL DEFAULT ''");
   }
 
   const clientCols = await db.all("PRAGMA table_info(clients)");
