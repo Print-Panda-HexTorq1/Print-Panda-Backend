@@ -18,5 +18,11 @@ export const config = {
   retentionMinutes: Number(process.env.RETENTION_MINUTES || 10),
   adminUsername: process.env.ADMIN_USERNAME || "admin",
   adminPassword: process.env.ADMIN_PASSWORD || "admin@panda2026",
-  jwtSecret: process.env.JWT_SECRET || "panda-print-default-secret-change-in-prod-2026"
+  jwtSecret: process.env.JWT_SECRET || "panda-print-default-secret-change-in-prod-2026",
+  publicBaseUrl: String(process.env.PUBLIC_BASE_URL || "https://git-pipeline.metatronhost.in/print-panda").replace(/\/+$/, ""),
+  webBaseUrl: String(process.env.WEB_BASE_URL || "https://print-panda.me").replace(/\/+$/, ""),
+  payPandaApiBase: process.env.PAY_PANDA_API_BASE || "https://metatronhost.in/pay-panda/api",
+  payPandaAppId: process.env.PAY_PANDA_APP_ID || "",
+  payPandaAppSecret: process.env.PAY_PANDA_APP_SECRET || "",
+  payPandaRedirectUrl: process.env.PAY_PANDA_REDIRECT_URL || ""
 };

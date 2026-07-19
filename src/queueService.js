@@ -21,7 +21,7 @@ function isAllowedTransition(from, to) {
 export async function getJobById(jobId) {
   const db = getDb();
   return db.get(
-    `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name
+    `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name, c.auto_payment_enabled AS auto_payment_enabled
      FROM jobs j
      LEFT JOIN clients c ON c.id = j.client_id
      WHERE j.id = ?`,
@@ -154,7 +154,7 @@ export async function listQueues(clientId = null, userId = null) {
   const db = getDb();
   const rows = clientId && userId
     ? await db.all(
-      `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name
+      `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name, c.auto_payment_enabled AS auto_payment_enabled
        FROM jobs j
        LEFT JOIN clients c ON c.id = j.client_id
        WHERE j.client_id = ? AND j.assigned_user_id = ? AND COALESCE(j.is_archived, 0) = 0
@@ -163,7 +163,7 @@ export async function listQueues(clientId = null, userId = null) {
     )
     : clientId
     ? await db.all(
-      `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name
+      `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name, c.auto_payment_enabled AS auto_payment_enabled
        FROM jobs j
        LEFT JOIN clients c ON c.id = j.client_id
        WHERE j.client_id = ? AND COALESCE(j.is_archived, 0) = 0
@@ -171,7 +171,7 @@ export async function listQueues(clientId = null, userId = null) {
       [clientId]
     )
     : await db.all(
-      `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name
+      `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name, c.auto_payment_enabled AS auto_payment_enabled
        FROM jobs j
        LEFT JOIN clients c ON c.id = j.client_id
        WHERE COALESCE(j.is_archived, 0) = 0

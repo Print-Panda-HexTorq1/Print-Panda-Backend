@@ -30,6 +30,7 @@ export async function initDb() {
       upi_name TEXT NOT NULL DEFAULT '',
       bw_price INTEGER NOT NULL DEFAULT 3,
       color_price INTEGER NOT NULL DEFAULT 10,
+      auto_payment_enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
   `);
@@ -70,6 +71,13 @@ export async function initDb() {
       unit_price INTEGER NOT NULL,
       total_price INTEGER NOT NULL,
       status TEXT NOT NULL,
+      payment_provider TEXT NOT NULL DEFAULT 'upi',
+      payment_order_id TEXT,
+      pay_panda_payment_id TEXT,
+      pay_panda_checkout_url TEXT,
+      pay_panda_status TEXT,
+      pay_panda_bank_rrn TEXT,
+      payment_verified_at TEXT,
       downloaded_by_desktop INTEGER NOT NULL DEFAULT 0,
       is_archived INTEGER NOT NULL DEFAULT 0,
       print_progress_pages INTEGER NOT NULL DEFAULT 0,
@@ -142,6 +150,27 @@ export async function initDb() {
   if (!hasPrintProgressUpdatedAt) {
     await db.exec("ALTER TABLE jobs ADD COLUMN print_progress_updated_at TEXT");
   }
+  if (!columns.some((c) => c.name === "payment_provider")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN payment_provider TEXT NOT NULL DEFAULT 'upi'");
+  }
+  if (!columns.some((c) => c.name === "payment_order_id")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN payment_order_id TEXT");
+  }
+  if (!columns.some((c) => c.name === "pay_panda_payment_id")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN pay_panda_payment_id TEXT");
+  }
+  if (!columns.some((c) => c.name === "pay_panda_checkout_url")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN pay_panda_checkout_url TEXT");
+  }
+  if (!columns.some((c) => c.name === "pay_panda_status")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN pay_panda_status TEXT");
+  }
+  if (!columns.some((c) => c.name === "pay_panda_bank_rrn")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN pay_panda_bank_rrn TEXT");
+  }
+  if (!columns.some((c) => c.name === "payment_verified_at")) {
+    await db.exec("ALTER TABLE jobs ADD COLUMN payment_verified_at TEXT");
+  }
 
   const clientCols = await db.all("PRAGMA table_info(clients)");
   if (!clientCols.some((c) => c.name === "upi_id")) {
@@ -155,6 +184,9 @@ export async function initDb() {
   }
   if (!clientCols.some((c) => c.name === "color_price")) {
     await db.exec("ALTER TABLE clients ADD COLUMN color_price INTEGER NOT NULL DEFAULT 10");
+  }
+  if (!clientCols.some((c) => c.name === "auto_payment_enabled")) {
+    await db.exec("ALTER TABLE clients ADD COLUMN auto_payment_enabled INTEGER NOT NULL DEFAULT 1");
   }
 
   const userCols = await db.all("PRAGMA table_info(users)");
@@ -203,6 +235,8 @@ export async function initDb() {
   await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_uid ON clients(client_uid)");
   await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uid ON users(user_uid)");
   await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)");
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_payment_order ON jobs(payment_order_id)");
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_pay_panda_payment ON jobs(pay_panda_payment_id)");
 
   return db;
 }

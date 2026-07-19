@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import express from "express";
 import multer from "multer";
 import bcrypt from "bcryptjs";
+import { PayPanda } from "pay-panda-js";
 import { getDb } from "./db.js";
 import { config } from "./config.js";
 import { detectPageCount } from "./documentInspector.js";
@@ -35,6 +36,7 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+let payPandaClient = null;
 
 function upiLink(jobId, amount, upiId, upiName) {
   const params = new URLSearchParams({
@@ -45,6 +47,177 @@ function upiLink(jobId, amount, upiId, upiName) {
     tn: `Print Job ${jobId}`
   });
   return `upi://pay?${params.toString()}`;
+}
+
+function isPayPandaConfigured() {
+  return Boolean(config.payPandaAppId && config.payPandaAppSecret);
+}
+
+function getPayPandaClient() {
+  if (!isPayPandaConfigured()) {
+    return null;
+  }
+  if (!payPandaClient) {
+    payPandaClient = new PayPanda({
+      appId: config.payPandaAppId,
+      appSecret: config.payPandaAppSecret,
+      apiBase: config.payPandaApiBase
+    });
+  }
+  return payPandaClient;
+}
+
+function makePayPandaOrderId(jobId) {
+  return `PP-JOB-${jobId}`;
+}
+
+function getPayPandaRedirectUrl() {
+  return config.payPandaRedirectUrl || `${config.publicBaseUrl}/api/pay-panda/callback`;
+}
+
+function normalizePayPandaStatus(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function isSuccessfulPayPandaStatus(value) {
+  return ["SUCCESS", "PAID", "COMPLETED", "CAPTURED"].includes(normalizePayPandaStatus(value));
+}
+
+function getVerificationPaymentId(verification = {}) {
+  return verification.paymentId || verification.payment_id || verification.pay_panda_payment_id || "";
+}
+
+function getVerificationBankRrn(verification = {}) {
+  return verification.bankRrn || verification.bank_rrn || verification.rrn || "";
+}
+
+async function attachPaymentToJob({ job, amount, customerName, customerMobile, fallbackUpiId, fallbackUpiName }) {
+  const db = getDb();
+  const orderId = makePayPandaOrderId(job.id);
+  const fallbackPayment = {
+    provider: "upi",
+    amount,
+    upiId: fallbackUpiId || config.upiId,
+    upiLink: upiLink(job.id, amount, fallbackUpiId, fallbackUpiName),
+    autoPaymentEnabled: Boolean(Number(job.auto_payment_enabled ?? 1)),
+    autoVerificationAvailable: false
+  };
+
+  const payPanda = getPayPandaClient();
+  if (!payPanda) {
+    await db.run(
+      "UPDATE jobs SET payment_provider = 'upi', payment_order_id = ?, updated_at = ? WHERE id = ?",
+      [orderId, nowIso(), job.id]
+    );
+    return fallbackPayment;
+  }
+
+  try {
+    const payment = await payPanda.createPayment({
+      orderId,
+      amount,
+      customerName: customerName || "Guest",
+      customerMobile,
+      reason: `Print Panda job ${job.queue_token || job.id}`,
+      remark1: `Job #${job.id}`,
+      redirectUrl: getPayPandaRedirectUrl(),
+      expiresInMinutes: 20
+    });
+    await db.run(
+      `UPDATE jobs
+       SET payment_provider = 'pay_panda',
+           payment_order_id = ?,
+           pay_panda_payment_id = ?,
+           pay_panda_checkout_url = ?,
+           pay_panda_status = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      [
+        orderId,
+        payment.paymentId || "",
+        payment.checkoutUrl || "",
+        payment.status || "PENDING",
+        nowIso(),
+        job.id
+      ]
+    );
+    return {
+      ...fallbackPayment,
+      provider: "pay_panda",
+      orderId,
+      paymentId: payment.paymentId,
+      checkoutUrl: payment.checkoutUrl,
+      upiLink: payment.checkoutUrl || fallbackPayment.upiLink,
+      autoVerificationAvailable: true,
+      status: payment.status || "PENDING"
+    };
+  } catch (error) {
+    console.error("Pay-Panda checkout creation failed; falling back to UPI", error);
+    await db.run(
+      "UPDATE jobs SET payment_provider = 'upi', payment_order_id = ?, updated_at = ? WHERE id = ?",
+      [orderId, nowIso(), job.id]
+    );
+    return fallbackPayment;
+  }
+}
+
+async function verifyPayPandaJob(job, input = {}) {
+  const payPanda = getPayPandaClient();
+  if (!payPanda) {
+    throw new Error("Pay-Panda is not configured on this backend");
+  }
+
+  const orderId = input.orderId || job.payment_order_id || makePayPandaOrderId(job.id);
+  const paymentId = input.paymentId || job.pay_panda_payment_id || "";
+  const verification = await payPanda.verifyPayment({
+    paymentId,
+    orderId,
+    amount: Number(job.total_price || 0),
+    customerMobile: input.customerMobile || ""
+  });
+  const status = normalizePayPandaStatus(verification?.status || input.status);
+  if (!isSuccessfulPayPandaStatus(status)) {
+    const error = new Error("Payment is not successful yet");
+    error.statusCode = 409;
+    throw error;
+  }
+  return {
+    ...verification,
+    paymentId: getVerificationPaymentId(verification) || paymentId,
+    status,
+    bankRrn: getVerificationBankRrn(verification)
+  };
+}
+
+async function markPaymentVerified(job, verification = {}, actor = null) {
+  const db = getDb();
+  const verifiedAt = nowIso();
+  await db.run(
+    `UPDATE jobs
+     SET pay_panda_payment_id = COALESCE(?, pay_panda_payment_id),
+         pay_panda_status = COALESCE(?, pay_panda_status),
+         pay_panda_bank_rrn = COALESCE(?, pay_panda_bank_rrn),
+         payment_verified_at = ?,
+         updated_at = ?
+     WHERE id = ?`,
+    [
+      verification.paymentId || null,
+      verification.status || null,
+      verification.bankRrn || null,
+      verifiedAt,
+      verifiedAt,
+      job.id
+    ]
+  );
+
+  let current = await getJobById(job.id);
+  if (current.status === "payment_pending") {
+    current = await updateStatus(job.id, "paid", actor);
+  }
+  if (Number(current.auto_payment_enabled ?? 1) && current.status === "paid") {
+    current = await updateStatus(job.id, "approved", actor);
+  }
+  return current;
 }
 
 export function createRoutes({ onQueueChanged }) {
@@ -190,6 +363,43 @@ export function createRoutes({ onQueueChanged }) {
     }
   });
 
+  router.get("/api/shop/settings", requireUser, async (req, res, next) => {
+    try {
+      const db = getDb();
+      const client = await db.get(
+        "SELECT id, auto_payment_enabled FROM clients WHERE id = ?",
+        [req.user.clientId]
+      );
+      if (!client) {
+        return res.status(404).json({ error: "Shop not found" });
+      }
+      res.json({
+        autoPaymentEnabled: Boolean(Number(client.auto_payment_enabled ?? 1)),
+        payPandaConfigured: isPayPandaConfigured()
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/api/shop/settings", requireUser, async (req, res, next) => {
+    try {
+      const nextAutoPayment = req.body?.autoPaymentEnabled === false ? 0 : 1;
+      const db = getDb();
+      await db.run(
+        "UPDATE clients SET auto_payment_enabled = ? WHERE id = ?",
+        [nextAutoPayment, req.user.clientId]
+      );
+      res.json({
+        ok: true,
+        autoPaymentEnabled: Boolean(nextAutoPayment),
+        payPandaConfigured: isPayPandaConfigured()
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // ── Queue – filtered by client when authenticated  ─────────────────────────
   router.get("/api/queues", requireUser, async (req, res, next) => {
     try {
@@ -222,10 +432,11 @@ export function createRoutes({ onQueueChanged }) {
            c.id AS client_id,
            c.client_uid AS client_uid,
            c.shop_name AS shop_name,
-           c.upi_id AS upi_id,
-           c.upi_name AS upi_name,
-           c.bw_price AS bw_price,
-           c.color_price AS color_price
+            c.upi_id AS upi_id,
+            c.upi_name AS upi_name,
+            c.bw_price AS bw_price,
+            c.color_price AS color_price,
+            c.auto_payment_enabled AS auto_payment_enabled
          FROM users u
          JOIN clients c ON c.id = u.client_id
          WHERE u.user_uid = ?`,
@@ -243,6 +454,7 @@ export function createRoutes({ onQueueChanged }) {
         clientUid: user.client_uid,
         upiId: user.upi_id || config.upiId,
         upiName: user.upi_name || config.upiName,
+        autoPaymentEnabled: Boolean(Number(user.auto_payment_enabled ?? 1)),
         pricing: {
           bw: Number.isFinite(Number(user.bw_price)) ? Number(user.bw_price) : Number(config.defaultBwPrice),
           color: Number.isFinite(Number(user.color_price)) ? Number(user.color_price) : Number(config.defaultColorPrice)
@@ -268,10 +480,11 @@ export function createRoutes({ onQueueChanged }) {
            c.id AS client_id,
            c.shop_name AS shop_name,
            c.client_uid AS client_uid,
-           c.upi_id AS upi_id,
-           c.upi_name AS upi_name,
-           c.bw_price AS bw_price,
-           c.color_price AS color_price
+            c.upi_id AS upi_id,
+            c.upi_name AS upi_name,
+            c.bw_price AS bw_price,
+            c.color_price AS color_price,
+            c.auto_payment_enabled AS auto_payment_enabled
          FROM users u
          JOIN clients c ON c.id = u.client_id
          WHERE u.user_uid = ?`,
@@ -338,17 +551,21 @@ export function createRoutes({ onQueueChanged }) {
       await addJobStatusHistory(insertResult.lastID, "payment_pending", "upload", now);
 
       const job = await getJobById(insertResult.lastID);
+      const payment = await attachPaymentToJob({
+        job,
+        amount: totalPrice,
+        customerName: req.body.customerName || "Guest",
+        customerMobile: req.body.customerMobile || "",
+        fallbackUpiId: user.upi_id,
+        fallbackUpiName: user.upi_name
+      });
       onQueueChanged();
 
       return res.status(201).json({
         job,
         shopName: user.shop_name,
         assignedOperator: user.username,
-        payment: {
-          amount: totalPrice,
-          upiId: user.upi_id || config.upiId,
-          upiLink: upiLink(job.id, totalPrice, user.upi_id, user.upi_name)
-        }
+        payment
       });
     } catch (error) {
       next(error);
@@ -422,16 +639,20 @@ export function createRoutes({ onQueueChanged }) {
       await addJobStatusHistory(insertResult.lastID, "payment_pending", "upload", now);
 
       const job = await getJobById(insertResult.lastID);
+      const payment = await attachPaymentToJob({
+        job,
+        amount: totalPrice,
+        customerName: req.body.customerName || "Guest",
+        customerMobile: req.body.customerMobile || "",
+        fallbackUpiId: client.upi_id,
+        fallbackUpiName: client.upi_name
+      });
       onQueueChanged();
 
       return res.status(201).json({
         job,
         shopName: client.shop_name,
-        payment: {
-          amount: totalPrice,
-          upiId: client.upi_id || config.upiId,
-          upiLink: upiLink(job.id, totalPrice, client.upi_id, client.upi_name)
-        }
+        payment
       });
     } catch (error) {
       next(error);
@@ -494,24 +715,89 @@ export function createRoutes({ onQueueChanged }) {
       await addJobStatusHistory(insertResult.lastID, "payment_pending", "upload", now);
 
       const job = await getJobById(insertResult.lastID);
+      const payment = await attachPaymentToJob({
+        job,
+        amount: totalPrice,
+        customerName: req.body.customerName || "Guest",
+        customerMobile: req.body.customerMobile || "",
+        fallbackUpiId: config.upiId,
+        fallbackUpiName: config.upiName
+      });
       onQueueChanged();
 
       return res.status(201).json({
         job,
-        payment: {
-          amount: totalPrice,
-          upiId: config.upiId,
-          upiLink: upiLink(job.id, totalPrice, config.upiId, config.upiName)
-        }
+        payment
       });
     } catch (error) {
       next(error);
     }
   });
 
+  router.get("/api/pay-panda/callback", async (req, res, next) => {
+    try {
+      const db = getDb();
+      const paymentId = String(req.query.pay_panda_payment_id || req.query.payment_id || "").trim();
+      const orderId = String(req.query.order_id || "").trim();
+      const redirectedStatus = String(req.query.status || "").trim();
+      const job = await db.get(
+        `SELECT j.*, c.auto_payment_enabled AS auto_payment_enabled, u.user_uid AS user_uid
+         FROM jobs j
+         LEFT JOIN clients c ON c.id = j.client_id
+         LEFT JOIN users u ON u.id = j.assigned_user_id
+         WHERE (? <> '' AND j.payment_order_id = ?)
+            OR (? <> '' AND j.pay_panda_payment_id = ?)
+         ORDER BY j.id DESC
+         LIMIT 1`,
+        [orderId, orderId, paymentId, paymentId]
+      );
+      if (!job) {
+        const target = `${config.webBaseUrl}/?payment=missing`;
+        return res.redirect(target);
+      }
+
+      const verification = await verifyPayPandaJob(job, {
+        paymentId,
+        orderId,
+        status: redirectedStatus
+      });
+      const updated = await markPaymentVerified(job, verification, {
+        username: "pay-panda",
+        clientId: job.client_id
+      });
+      onQueueChanged();
+      const targetPath = job.user_uid ? `/u/${encodeURIComponent(job.user_uid)}` : "/";
+      const params = new URLSearchParams({
+        payment: "success",
+        jobId: String(updated.id),
+        token: String(updated.queue_token || `PP-${updated.id}`)
+      });
+      return res.redirect(`${config.webBaseUrl}${targetPath}?${params.toString()}`);
+    } catch (error) {
+      console.error("Pay-Panda callback verification failed", error);
+      const params = new URLSearchParams({
+        payment: "failed",
+        reason: String(error?.message || "verification_failed").slice(0, 120)
+      });
+      return res.redirect(`${config.webBaseUrl}/?${params.toString()}`);
+    }
+  });
+
+  async function verifyPaymentForJob(job, actor = null, input = {}) {
+    if (String(job.payment_provider || "upi") !== "pay_panda") {
+      return updateStatus(job.id, "paid", actor);
+    }
+    const verification = await verifyPayPandaJob(job, input);
+    return markPaymentVerified(job, verification, actor);
+  }
+
   router.post("/api/jobs/:id/verify-payment", async (req, res, next) => {
     try {
-      const updated = await updateStatus(req.params.id, "paid");
+      const job = await getJobById(req.params.id);
+      if (!job) {
+        return res.status(404).json({ error: "Job not found" });
+      }
+      const updated = await verifyPaymentForJob(job, null, req.body || {});
       onQueueChanged();
       res.json({ ok: true, job: updated });
     } catch (error) {
@@ -522,18 +808,19 @@ export function createRoutes({ onQueueChanged }) {
   router.post("/api/u/:userUid/jobs/:id/verify-payment", async (req, res, next) => {
     try {
       const db = getDb();
-      const link = await db.get(
-        `SELECT j.id
+      const job = await db.get(
+        `SELECT j.*, c.auto_payment_enabled AS auto_payment_enabled
          FROM jobs j
+         LEFT JOIN clients c ON c.id = j.client_id
          JOIN users u ON u.id = j.assigned_user_id
          WHERE j.id = ? AND u.user_uid = ?`,
         [req.params.id, req.params.userUid]
       );
-      if (!link) {
+      if (!job) {
         return res.status(404).json({ error: "Job not found for this upload link" });
       }
 
-      const updated = await updateStatus(req.params.id, "paid");
+      const updated = await verifyPaymentForJob(job, null, req.body || {});
       onQueueChanged();
       res.json({ ok: true, job: updated });
     } catch (error) {
