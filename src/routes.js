@@ -816,6 +816,7 @@ export function createRoutes({ onQueueChanged }) {
       await addJobStatusHistory(job.id, "payment_pending", "upload", nowIso());
       const payableJob = await getJobById(job.id);
       onQueueChanged();
+      await notifyJobChanged(payableJob, "received");
 
       return res.status(201).json({
         job: payableJob,
@@ -924,10 +925,12 @@ export function createRoutes({ onQueueChanged }) {
         fallbackUpiId: user.upi_id,
         fallbackUpiName: user.upi_name
       });
+      const payableJob = await getJobById(job.id);
       onQueueChanged();
+      await notifyJobChanged(payableJob, "received");
 
       return res.status(201).json({
-        job,
+        job: payableJob,
         shopName: user.shop_name,
         assignedOperator: user.username,
         payment
@@ -1012,10 +1015,12 @@ export function createRoutes({ onQueueChanged }) {
         fallbackUpiId: client.upi_id,
         fallbackUpiName: client.upi_name
       });
+      const payableJob = await getJobById(job.id);
       onQueueChanged();
+      await notifyJobChanged(payableJob, "received");
 
       return res.status(201).json({
-        job,
+        job: payableJob,
         shopName: client.shop_name,
         payment
       });

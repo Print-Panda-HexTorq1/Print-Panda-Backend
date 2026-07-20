@@ -71,10 +71,15 @@ export async function attachPushSubscriptionToJob({ userUid, endpoint, jobId }) 
 function notificationPayload(job, eventType = "status") {
   const status = String(job?.status || "").toLowerCase();
   const token = job?.queue_token || formatQueueToken(job?.id || 0);
-  const title = eventType === "progress" ? "Print Panda progress updated" : "Print Panda status updated";
-  const body = eventType === "progress"
-    ? `Job ${token}: ${Number(job.print_progress_pages || 0)}/${Number(job.print_progress_total || 0)} pages printed.`
-    : `Job ${token}: ${STATUS_MESSAGES[status] || "Status updated."}`;
+  let title = "Print Panda status updated";
+  let body = `Job ${token}: ${STATUS_MESSAGES[status] || "Status updated."}`;
+  if (eventType === "received") {
+    title = "Print Panda upload received";
+    body = `Job ${token}: Your document was received by the shop.`;
+  } else if (eventType === "progress") {
+    title = "Print Panda progress updated";
+    body = `Job ${token}: ${Number(job.print_progress_pages || 0)}/${Number(job.print_progress_total || 0)} pages printed.`;
+  }
   return {
     title,
     body,
