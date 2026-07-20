@@ -96,11 +96,23 @@ function isSuccessfulPayPandaStatus(value) {
 }
 
 function getVerificationPaymentId(verification = {}) {
-  return verification.paymentId || verification.payment_id || verification.pay_panda_payment_id || "";
+  return verification.paymentId
+    || verification.payment_id
+    || verification.pay_panda_payment_id
+    || verification.payment?.paymentId
+    || verification.payment?.payment_id
+    || verification.summary?.paymentId
+    || "";
 }
 
 function getVerificationBankRrn(verification = {}) {
-  return verification.bankRrn || verification.bank_rrn || verification.rrn || "";
+  return verification.bankRrn
+    || verification.bank_rrn
+    || verification.rrn
+    || verification.payment?.bankRrn
+    || verification.payment?.bank_rrn
+    || verification.summary?.bankRrn
+    || "";
 }
 
 function firstStringValue(source = {}, keys = []) {
@@ -204,9 +216,18 @@ async function verifyPayPandaJob(job, input = {}) {
     amount: Number(job.total_price || 0),
     customerMobile: input.customerMobile || ""
   });
-  const status = normalizePayPandaStatus(verification?.status || input.status);
-  if (!isSuccessfulPayPandaStatus(status)) {
-    const error = new Error("Payment is not successful yet");
+  const status = normalizePayPandaStatus(
+    verification?.payment?.status
+    || verification?.summary?.status
+    || verification?.status
+    || input.status
+  );
+  if (verification?.verified !== true || !isSuccessfulPayPandaStatus(status)) {
+    const error = new Error(
+      verification?.code === "AMOUNT_MISMATCH"
+        ? "Payment amount does not match this print job"
+        : verification?.message || "Payment is not successful yet"
+    );
     error.statusCode = 409;
     throw error;
   }
