@@ -474,7 +474,10 @@ export function createRoutes({ onQueueChanged }) {
         autoPaymentEnabled: Boolean(Number(client.auto_payment_enabled ?? 1)),
         bwPrice: Number.isFinite(Number(client.bw_price)) ? Number(client.bw_price) : Number(config.defaultBwPrice),
         colorPrice: Number.isFinite(Number(client.color_price)) ? Number(client.color_price) : Number(config.defaultColorPrice),
-        payPandaConfigured: isPayPandaConfigured(client)
+        payPandaConfigured: isPayPandaConfigured(client),
+        payPandaAppId: client.pay_panda_app_id || "",
+        payPandaApiBase: client.pay_panda_api_base || "",
+        hasPayPandaSecret: Boolean(String(client.pay_panda_app_secret || "").trim())
       });
     } catch (error) {
       next(error);
@@ -503,6 +506,15 @@ export function createRoutes({ onQueueChanged }) {
       const nextColorPrice = rawColorPrice === undefined
         ? Number(client.color_price || config.defaultColorPrice)
         : Number(rawColorPrice);
+      const nextPayPandaAppId = typeof req.body?.payPandaAppId === "string"
+        ? req.body.payPandaAppId.trim()
+        : client.pay_panda_app_id;
+      const nextPayPandaAppSecret = typeof req.body?.payPandaAppSecret === "string" && req.body.payPandaAppSecret.trim()
+        ? req.body.payPandaAppSecret.trim()
+        : client.pay_panda_app_secret;
+      const nextPayPandaApiBase = typeof req.body?.payPandaApiBase === "string"
+        ? req.body.payPandaApiBase.trim()
+        : client.pay_panda_api_base;
 
       if (!Number.isFinite(nextBwPrice) || nextBwPrice < 0) {
         return res.status(400).json({ error: "Invalid B/W price" });
@@ -512,15 +524,33 @@ export function createRoutes({ onQueueChanged }) {
       }
 
       await db.run(
-        "UPDATE clients SET auto_payment_enabled = ?, bw_price = ?, color_price = ? WHERE id = ?",
-        [nextAutoPayment, Math.round(nextBwPrice), Math.round(nextColorPrice), req.user.clientId]
+        `UPDATE clients
+         SET auto_payment_enabled = ?, bw_price = ?, color_price = ?,
+             pay_panda_app_id = ?, pay_panda_app_secret = ?, pay_panda_api_base = ?
+         WHERE id = ?`,
+        [
+          nextAutoPayment,
+          Math.round(nextBwPrice),
+          Math.round(nextColorPrice),
+          nextPayPandaAppId,
+          nextPayPandaAppSecret,
+          nextPayPandaApiBase,
+          req.user.clientId
+        ]
+      );
+      const updatedClient = await db.get(
+        "SELECT id, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
+        [req.user.clientId]
       );
       res.json({
         ok: true,
         autoPaymentEnabled: Boolean(nextAutoPayment),
         bwPrice: Math.round(nextBwPrice),
         colorPrice: Math.round(nextColorPrice),
-        payPandaConfigured: isPayPandaConfigured(client)
+        payPandaConfigured: isPayPandaConfigured(updatedClient),
+        payPandaAppId: updatedClient.pay_panda_app_id || "",
+        payPandaApiBase: updatedClient.pay_panda_api_base || "",
+        hasPayPandaSecret: Boolean(String(updatedClient.pay_panda_app_secret || "").trim())
       });
     } catch (error) {
       next(error);
