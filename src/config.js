@@ -53,5 +53,8 @@ export const config = {
   mailFrom: String(process.env.MAIL_FROM || process.env.SMTP_USER || process.env.GMAIL_USER || "").trim(),
   superAdminEmail: String(process.env.SUPER_ADMIN_EMAIL || process.env.ADMIN_EMAIL || "").trim(),
   dailyReportHour: Number(process.env.DAILY_REPORT_HOUR || 0),
-  dailyReportMinute: Number(process.env.DAILY_REPORT_MINUTE || 0)
+  dailyReportMinute: Number(process.env.DAILY_REPORT_MINUTE || 0),
+  webPushPublicKey: String(process.env.WEB_PUSH_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY || "").trim(),
+  webPushPrivateKey: String(process.env.WEB_PUSH_PRIVATE_KEY || process.env.VAPID_PRIVATE_KEY || "").trim(),
+  webPushSubject: String(process.env.WEB_PUSH_SUBJECT || process.env.MAIL_FROM || process.env.SMTP_USER || "mailto:support@printpanda.in").trim()
 };

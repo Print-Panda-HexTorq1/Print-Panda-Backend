@@ -23,6 +23,7 @@ import {
 } from "./queueService.js";
 import { formatQueueToken, getIsoDatePart, nowIso, safeInt, toBooleanInt } from "./utils.js";
 import { requireUser, signToken, verifyToken } from "./auth.js";
+import { getPushPublicConfig, notifyJobPush, savePushSubscription } from "./pushNotifications.js";
 
 const router = express.Router();
 
@@ -420,6 +421,40 @@ export function createRoutes({ onQueueChanged }) {
   // ── Health ─────────────────────────────────────────────────────────────────
   router.get("/health", (_, res) => {
     res.json({ ok: true, name: "panda-print-backend" });
+  });
+
+  const notifyJobChanged = async (job, eventType = "status") => {
+    try {
+      await notifyJobPush(job, eventType);
+    } catch (error) {
+      console.warn("Job push notification skipped", error?.message || error);
+    }
+  };
+
+  router.get("/api/push/config", (_, res) => {
+    res.json(getPushPublicConfig());
+  });
+
+  router.post("/api/u/:userUid/push-subscriptions", async (req, res, next) => {
+    try {
+      const db = getDb();
+      const user = await db.get(
+        "SELECT id, user_uid FROM users WHERE user_uid = ?",
+        [String(req.params.userUid || "").trim()]
+      );
+      if (!user) {
+        return res.status(404).json({ error: "Upload link user not found" });
+      }
+      await savePushSubscription({
+        userUid: user.user_uid,
+        userId: user.id,
+        jobId: Number(req.body?.jobId || 0) || null,
+        subscription: req.body?.subscription
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
   });
 
   // ── Desktop-user auth ──────────────────────────────────────────────────────
@@ -1119,6 +1154,7 @@ export function createRoutes({ onQueueChanged }) {
         clientId: job.client_id
       });
       onQueueChanged();
+      await notifyJobChanged(updated);
       const targetPath = job.user_uid ? `/u/${encodeURIComponent(job.user_uid)}` : "/";
       const params = new URLSearchParams({
         payment: "success",
@@ -1171,6 +1207,7 @@ export function createRoutes({ onQueueChanged }) {
       }
       const updated = await verifyPaymentForJob(job, null, req.body || {});
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1197,6 +1234,7 @@ export function createRoutes({ onQueueChanged }) {
 
       const updated = await verifyPaymentForJob(job, null, req.body || {});
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1277,6 +1315,7 @@ export function createRoutes({ onQueueChanged }) {
       }
       const updated = await updateStatus(req.params.id, "approved", actor);
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1295,6 +1334,7 @@ export function createRoutes({ onQueueChanged }) {
       const actor = await resolveActorFromHeader(req);
       const updated = await updateStatus(req.params.id, "printing", actor);
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1314,6 +1354,7 @@ export function createRoutes({ onQueueChanged }) {
       const updated = await updateStatus(req.params.id, "printed", actor);
       scheduleCleanupForJob(updated.id, onQueueChanged);
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1332,6 +1373,7 @@ export function createRoutes({ onQueueChanged }) {
       const actor = await resolveActorFromHeader(req);
       const updated = await updateStatus(req.params.id, "print_failed", actor);
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1350,6 +1392,7 @@ export function createRoutes({ onQueueChanged }) {
       const actor = await resolveActorFromHeader(req);
       const updated = await updateStatus(req.params.id, "approved", actor);
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1367,6 +1410,7 @@ export function createRoutes({ onQueueChanged }) {
       }
       const updated = await updateStatus(req.params.id, "rejected");
       onQueueChanged();
+      await notifyJobChanged(updated);
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);
@@ -1388,6 +1432,7 @@ export function createRoutes({ onQueueChanged }) {
         req.body?.totalPages
       );
       onQueueChanged();
+      await notifyJobChanged(updated, "progress");
       res.json({ ok: true, job: updated });
     } catch (error) {
       next(error);

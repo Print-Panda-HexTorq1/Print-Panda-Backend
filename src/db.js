@@ -105,6 +105,19 @@ export async function initDb() {
     );
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_uid TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      job_id INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      subscription_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
   const columns = await db.all("PRAGMA table_info(jobs)");
   const hasQueueToken = columns.some((c) => c.name === "queue_token");
   const hasPageCount = columns.some((c) => c.name === "page_count");
@@ -265,6 +278,8 @@ export async function initDb() {
   await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)");
   await db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_payment_order ON jobs(payment_order_id)");
   await db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_pay_panda_payment ON jobs(pay_panda_payment_id)");
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_uid ON push_subscriptions(user_uid)");
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_job_id ON push_subscriptions(job_id)");
 
   return db;
 }

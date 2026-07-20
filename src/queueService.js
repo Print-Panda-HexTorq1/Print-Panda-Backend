@@ -25,9 +25,11 @@ export async function getJobById(jobId) {
             c.auto_payment_enabled AS auto_payment_enabled,
             c.pay_panda_app_id AS pay_panda_app_id,
             c.pay_panda_app_secret AS pay_panda_app_secret,
-            c.pay_panda_api_base AS pay_panda_api_base
+            c.pay_panda_api_base AS pay_panda_api_base,
+            u.user_uid AS user_uid
      FROM jobs j
      LEFT JOIN clients c ON c.id = j.client_id
+     LEFT JOIN users u ON u.id = j.assigned_user_id
      WHERE j.id = ?`,
     [jobId]
   );
