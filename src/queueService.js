@@ -21,7 +21,11 @@ function isAllowedTransition(from, to) {
 export async function getJobById(jobId) {
   const db = getDb();
   return db.get(
-    `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name, c.auto_payment_enabled AS auto_payment_enabled
+    `SELECT j.*, c.client_uid AS client_uid, c.shop_name AS shop_name,
+            c.auto_payment_enabled AS auto_payment_enabled,
+            c.pay_panda_app_id AS pay_panda_app_id,
+            c.pay_panda_app_secret AS pay_panda_app_secret,
+            c.pay_panda_api_base AS pay_panda_api_base
      FROM jobs j
      LEFT JOIN clients c ON c.id = j.client_id
      WHERE j.id = ?`,

@@ -17,6 +17,15 @@ function generateUserUid() {
   return `u_${crypto.randomBytes(6).toString("hex")}`;
 }
 
+function serializeClient(client) {
+  if (!client) return client;
+  const { pay_panda_app_secret: _secret, ...safeClient } = client;
+  return {
+    ...safeClient,
+    has_pay_panda_secret: Boolean(String(client.pay_panda_app_secret || "").trim())
+  };
+}
+
 async function ensureUserUid(db, userRow) {
   if (!userRow) return null;
   const existing = String(userRow.user_uid || "").trim();
@@ -56,7 +65,7 @@ adminRouter.get("/clients", async (_, res, next) => {
   try {
     const db = getDb();
     const clients = await db.all("SELECT * FROM clients ORDER BY created_at DESC");
-    return res.json(clients);
+    return res.json(clients.map(serializeClient));
   } catch (err) {
     next(err);
   }
@@ -89,7 +98,16 @@ adminRouter.get("/analytics", async (req, res, next) => {
 // POST /api/admin/clients
 adminRouter.post("/clients", async (req, res, next) => {
   try {
-    const { shopName, upiId = "", upiName = "", bwPrice = config.defaultBwPrice, colorPrice = config.defaultColorPrice } = req.body || {};
+    const {
+      shopName,
+      upiId = "",
+      upiName = "",
+      bwPrice = config.defaultBwPrice,
+      colorPrice = config.defaultColorPrice,
+      payPandaAppId = "",
+      payPandaAppSecret = "",
+      payPandaApiBase = ""
+    } = req.body || {};
     if (!shopName || typeof shopName !== "string" || !shopName.trim()) {
       return res.status(400).json({ error: "shopName is required" });
     }
@@ -103,11 +121,25 @@ adminRouter.post("/clients", async (req, res, next) => {
     const uid = generateUid();
     const now = nowIso();
     const result = await db.run(
-      "INSERT INTO clients (client_uid, shop_name, upi_id, upi_name, bw_price, color_price, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [uid, shopName.trim(), upiId.trim(), upiName.trim(), safeBwPrice, safeColorPrice, now]
+      `INSERT INTO clients (
+         client_uid, shop_name, upi_id, upi_name, bw_price, color_price,
+         pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uid,
+        shopName.trim(),
+        upiId.trim(),
+        upiName.trim(),
+        safeBwPrice,
+        safeColorPrice,
+        String(payPandaAppId || "").trim(),
+        String(payPandaAppSecret || "").trim(),
+        String(payPandaApiBase || "").trim(),
+        now
+      ]
     );
     const client = await db.get("SELECT * FROM clients WHERE id = ?", [result.lastID]);
-    return res.status(201).json(client);
+    return res.status(201).json(serializeClient(client));
   } catch (err) {
     next(err);
   }
@@ -123,6 +155,11 @@ adminRouter.put("/clients/:id", async (req, res, next) => {
     const shopName = typeof req.body.shopName === "string" ? req.body.shopName.trim() : client.shop_name;
     const upiId = typeof req.body.upiId === "string" ? req.body.upiId.trim() : client.upi_id;
     const upiName = typeof req.body.upiName === "string" ? req.body.upiName.trim() : client.upi_name;
+    const payPandaAppId = typeof req.body.payPandaAppId === "string" ? req.body.payPandaAppId.trim() : client.pay_panda_app_id;
+    const payPandaAppSecret = typeof req.body.payPandaAppSecret === "string" && req.body.payPandaAppSecret.trim()
+      ? req.body.payPandaAppSecret.trim()
+      : client.pay_panda_app_secret;
+    const payPandaApiBase = typeof req.body.payPandaApiBase === "string" ? req.body.payPandaApiBase.trim() : client.pay_panda_api_base;
     const bwPrice = Number.isFinite(Number(req.body.bwPrice)) && Number(req.body.bwPrice) >= 0
       ? Number(req.body.bwPrice)
       : Number(client.bw_price || config.defaultBwPrice || 3);
@@ -133,11 +170,14 @@ adminRouter.put("/clients/:id", async (req, res, next) => {
     if (!shopName) return res.status(400).json({ error: "shopName cannot be empty" });
 
     await db.run(
-      "UPDATE clients SET shop_name = ?, upi_id = ?, upi_name = ?, bw_price = ?, color_price = ? WHERE id = ?",
-      [shopName, upiId, upiName, bwPrice, colorPrice, client.id]
+      `UPDATE clients
+       SET shop_name = ?, upi_id = ?, upi_name = ?, bw_price = ?, color_price = ?,
+           pay_panda_app_id = ?, pay_panda_app_secret = ?, pay_panda_api_base = ?
+       WHERE id = ?`,
+      [shopName, upiId, upiName, bwPrice, colorPrice, payPandaAppId, payPandaAppSecret, payPandaApiBase, client.id]
     );
     const updated = await db.get("SELECT * FROM clients WHERE id = ?", [client.id]);
-    return res.json(updated);
+    return res.json(serializeClient(updated));
   } catch (err) {
     next(err);
   }

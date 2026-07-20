@@ -31,6 +31,9 @@ export async function initDb() {
       bw_price INTEGER NOT NULL DEFAULT 3,
       color_price INTEGER NOT NULL DEFAULT 10,
       auto_payment_enabled INTEGER NOT NULL DEFAULT 1,
+      pay_panda_app_id TEXT NOT NULL DEFAULT '',
+      pay_panda_app_secret TEXT NOT NULL DEFAULT '',
+      pay_panda_api_base TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
   `);
@@ -195,6 +198,15 @@ export async function initDb() {
   }
   if (!clientCols.some((c) => c.name === "auto_payment_enabled")) {
     await db.exec("ALTER TABLE clients ADD COLUMN auto_payment_enabled INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!clientCols.some((c) => c.name === "pay_panda_app_id")) {
+    await db.exec("ALTER TABLE clients ADD COLUMN pay_panda_app_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!clientCols.some((c) => c.name === "pay_panda_app_secret")) {
+    await db.exec("ALTER TABLE clients ADD COLUMN pay_panda_app_secret TEXT NOT NULL DEFAULT ''");
+  }
+  if (!clientCols.some((c) => c.name === "pay_panda_api_base")) {
+    await db.exec("ALTER TABLE clients ADD COLUMN pay_panda_api_base TEXT NOT NULL DEFAULT ''");
   }
 
   const userCols = await db.all("PRAGMA table_info(users)");

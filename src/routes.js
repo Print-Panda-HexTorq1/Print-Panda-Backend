@@ -36,7 +36,7 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
-let payPandaClient = null;
+const payPandaClientCache = new Map();
 
 function upiLink(jobId, amount, upiId, upiName) {
   const params = new URLSearchParams({
@@ -49,22 +49,33 @@ function upiLink(jobId, amount, upiId, upiName) {
   return `upi://pay?${params.toString()}`;
 }
 
-function isPayPandaConfigured() {
-  return Boolean(config.payPandaAppId && config.payPandaAppSecret);
+function getShopPayPandaConfig(source = {}) {
+  return {
+    appId: String(source.pay_panda_app_id || "").trim(),
+    appSecret: String(source.pay_panda_app_secret || "").trim(),
+    apiBase: String(source.pay_panda_api_base || config.payPandaApiBase || "").trim()
+  };
 }
 
-function getPayPandaClient() {
-  if (!isPayPandaConfigured()) {
+function isPayPandaConfigured(source = {}) {
+  const shopConfig = getShopPayPandaConfig(source);
+  return Boolean(shopConfig.appId && shopConfig.appSecret);
+}
+
+function getPayPandaClient(source = {}) {
+  const shopConfig = getShopPayPandaConfig(source);
+  if (!shopConfig.appId || !shopConfig.appSecret) {
     return null;
   }
-  if (!payPandaClient) {
-    payPandaClient = new PayPanda({
-      appId: config.payPandaAppId,
-      appSecret: config.payPandaAppSecret,
-      apiBase: config.payPandaApiBase
-    });
+  const cacheKey = `${shopConfig.apiBase}|${shopConfig.appId}|${shopConfig.appSecret}`;
+  if (!payPandaClientCache.has(cacheKey)) {
+    payPandaClientCache.set(cacheKey, new PayPanda({
+      appId: shopConfig.appId,
+      appSecret: shopConfig.appSecret,
+      apiBase: shopConfig.apiBase
+    }));
   }
-  return payPandaClient;
+  return payPandaClientCache.get(cacheKey);
 }
 
 function makePayPandaOrderId(jobId) {
@@ -122,9 +133,9 @@ async function attachPaymentToJob({ job, amount, customerName, customerMobile, f
     return fallbackPayment;
   }
 
-  const payPanda = getPayPandaClient();
+  const payPanda = getPayPandaClient(job);
   if (!payPanda) {
-    const error = new Error("Pay-Panda keys are not configured on the backend");
+    const error = new Error("Pay-Panda keys are not configured for this shop");
     error.statusCode = 503;
     throw error;
   }
@@ -171,7 +182,7 @@ async function attachPaymentToJob({ job, amount, customerName, customerMobile, f
   } catch (error) {
     console.error("Pay-Panda checkout creation failed", error);
     if (String(error?.message || "").toLowerCase() === "fetch failed") {
-      error.message = `Cannot reach Pay-Panda API at ${config.payPandaApiBase}`;
+      error.message = `Cannot reach Pay-Panda API at ${getShopPayPandaConfig(job).apiBase}`;
     }
     error.statusCode = error.statusCode || 502;
     throw error;
@@ -179,9 +190,9 @@ async function attachPaymentToJob({ job, amount, customerName, customerMobile, f
 }
 
 async function verifyPayPandaJob(job, input = {}) {
-  const payPanda = getPayPandaClient();
+  const payPanda = getPayPandaClient(job);
   if (!payPanda) {
-    throw new Error("Pay-Panda is not configured on this backend");
+    throw new Error("Pay-Panda is not configured for this shop");
   }
 
   const orderId = input.orderId || job.payment_order_id || makePayPandaOrderId(job.id);
@@ -359,7 +370,10 @@ export function createRoutes({ onQueueChanged }) {
          c.upi_name AS upi_name,
          c.bw_price AS bw_price,
          c.color_price AS color_price,
-         c.auto_payment_enabled AS auto_payment_enabled
+         c.auto_payment_enabled AS auto_payment_enabled,
+         c.pay_panda_app_id AS pay_panda_app_id,
+         c.pay_panda_app_secret AS pay_panda_app_secret,
+         c.pay_panda_api_base AS pay_panda_api_base
        FROM users u
        JOIN clients c ON c.id = u.client_id
        WHERE u.user_uid = ?`,
@@ -450,7 +464,7 @@ export function createRoutes({ onQueueChanged }) {
     try {
       const db = getDb();
       const client = await db.get(
-        "SELECT id, auto_payment_enabled, bw_price, color_price FROM clients WHERE id = ?",
+        "SELECT id, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
         [req.user.clientId]
       );
       if (!client) {
@@ -460,7 +474,7 @@ export function createRoutes({ onQueueChanged }) {
         autoPaymentEnabled: Boolean(Number(client.auto_payment_enabled ?? 1)),
         bwPrice: Number.isFinite(Number(client.bw_price)) ? Number(client.bw_price) : Number(config.defaultBwPrice),
         colorPrice: Number.isFinite(Number(client.color_price)) ? Number(client.color_price) : Number(config.defaultColorPrice),
-        payPandaConfigured: isPayPandaConfigured()
+        payPandaConfigured: isPayPandaConfigured(client)
       });
     } catch (error) {
       next(error);
@@ -471,7 +485,7 @@ export function createRoutes({ onQueueChanged }) {
     try {
       const db = getDb();
       const client = await db.get(
-        "SELECT id, auto_payment_enabled, bw_price, color_price FROM clients WHERE id = ?",
+        "SELECT id, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
         [req.user.clientId]
       );
       if (!client) {
@@ -506,7 +520,7 @@ export function createRoutes({ onQueueChanged }) {
         autoPaymentEnabled: Boolean(nextAutoPayment),
         bwPrice: Math.round(nextBwPrice),
         colorPrice: Math.round(nextColorPrice),
-        payPandaConfigured: isPayPandaConfigured()
+        payPandaConfigured: isPayPandaConfigured(client)
       });
     } catch (error) {
       next(error);
@@ -549,7 +563,10 @@ export function createRoutes({ onQueueChanged }) {
             c.upi_name AS upi_name,
             c.bw_price AS bw_price,
             c.color_price AS color_price,
-            c.auto_payment_enabled AS auto_payment_enabled
+            c.auto_payment_enabled AS auto_payment_enabled,
+            c.pay_panda_app_id AS pay_panda_app_id,
+            c.pay_panda_app_secret AS pay_panda_app_secret,
+            c.pay_panda_api_base AS pay_panda_api_base
          FROM users u
          JOIN clients c ON c.id = u.client_id
          WHERE u.user_uid = ?`,
@@ -571,7 +588,8 @@ export function createRoutes({ onQueueChanged }) {
         pricing: {
           bw: Number.isFinite(Number(user.bw_price)) ? Number(user.bw_price) : Number(config.defaultBwPrice),
           color: Number.isFinite(Number(user.color_price)) ? Number(user.color_price) : Number(config.defaultColorPrice)
-        }
+        },
+        payPandaConfigured: isPayPandaConfigured(user)
       });
     } catch (error) {
       next(error);
@@ -746,7 +764,10 @@ export function createRoutes({ onQueueChanged }) {
             c.upi_name AS upi_name,
             c.bw_price AS bw_price,
             c.color_price AS color_price,
-            c.auto_payment_enabled AS auto_payment_enabled
+            c.auto_payment_enabled AS auto_payment_enabled,
+            c.pay_panda_app_id AS pay_panda_app_id,
+            c.pay_panda_app_secret AS pay_panda_app_secret,
+            c.pay_panda_api_base AS pay_panda_api_base
          FROM users u
          JOIN clients c ON c.id = u.client_id
          WHERE u.user_uid = ?`,
@@ -1018,7 +1039,11 @@ export function createRoutes({ onQueueChanged }) {
       ]);
       const redirectedStatus = firstStringValue(input, ["status", "payment_status", "paymentStatus"]);
       const job = await db.get(
-        `SELECT j.*, c.auto_payment_enabled AS auto_payment_enabled, u.user_uid AS user_uid
+        `SELECT j.*, c.auto_payment_enabled AS auto_payment_enabled,
+                c.pay_panda_app_id AS pay_panda_app_id,
+                c.pay_panda_app_secret AS pay_panda_app_secret,
+                c.pay_panda_api_base AS pay_panda_api_base,
+                u.user_uid AS user_uid
          FROM jobs j
          LEFT JOIN clients c ON c.id = j.client_id
          LEFT JOIN users u ON u.id = j.assigned_user_id
@@ -1107,7 +1132,10 @@ export function createRoutes({ onQueueChanged }) {
     try {
       const db = getDb();
       const job = await db.get(
-        `SELECT j.*, c.auto_payment_enabled AS auto_payment_enabled
+        `SELECT j.*, c.auto_payment_enabled AS auto_payment_enabled,
+                c.pay_panda_app_id AS pay_panda_app_id,
+                c.pay_panda_app_secret AS pay_panda_app_secret,
+                c.pay_panda_api_base AS pay_panda_api_base
          FROM jobs j
          LEFT JOIN clients c ON c.id = j.client_id
          JOIN users u ON u.id = j.assigned_user_id
