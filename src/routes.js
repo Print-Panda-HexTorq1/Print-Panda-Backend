@@ -1105,6 +1105,7 @@ export function createRoutes({ onQueueChanged }) {
       const targetPath = job.user_uid ? `/u/${encodeURIComponent(job.user_uid)}` : "/";
       const params = new URLSearchParams({
         payment: "success",
+        screen: "status",
         jobId: String(updated.id),
         token: String(updated.queue_token || `PP-${updated.id}`)
       });
@@ -1116,6 +1117,7 @@ export function createRoutes({ onQueueChanged }) {
       console.error("Pay-Panda callback verification failed", error);
       const params = new URLSearchParams({
         payment: "failed",
+        screen: "status",
         reason: String(error?.message || "verification_failed").slice(0, 120)
       });
       if (req.method === "POST") {
