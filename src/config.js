@@ -2,10 +2,12 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-dotenv.config({ override: true });
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, "..");
+
+dotenv.config({ path: path.join(projectRoot, ".env"), override: true });
+dotenv.config({ path: path.join(projectRoot, ".env.local"), override: true });
 
 const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || "https://git-pipeline.metatronhost.in/print-panda").replace(/\/+$/, "");
 const payPandaRedirectUrl = String(process.env.PAY_PANDA_REDIRECT_URL || "").trim()
