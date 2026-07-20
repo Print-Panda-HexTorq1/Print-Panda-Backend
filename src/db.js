@@ -26,6 +26,7 @@ export async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       client_uid TEXT NOT NULL UNIQUE,
       shop_name TEXT NOT NULL,
+      email TEXT NOT NULL DEFAULT '',
       upi_id TEXT NOT NULL DEFAULT '',
       upi_name TEXT NOT NULL DEFAULT '',
       bw_price INTEGER NOT NULL DEFAULT 3,
@@ -44,6 +45,7 @@ export async function initDb() {
       client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
       user_uid TEXT NOT NULL UNIQUE,
       username TEXT NOT NULL UNIQUE,
+      email TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
@@ -187,6 +189,9 @@ export async function initDb() {
   if (!clientCols.some((c) => c.name === "upi_id")) {
     await db.exec("ALTER TABLE clients ADD COLUMN upi_id TEXT NOT NULL DEFAULT ''");
   }
+  if (!clientCols.some((c) => c.name === "email")) {
+    await db.exec("ALTER TABLE clients ADD COLUMN email TEXT NOT NULL DEFAULT ''");
+  }
   if (!clientCols.some((c) => c.name === "upi_name")) {
     await db.exec("ALTER TABLE clients ADD COLUMN upi_name TEXT NOT NULL DEFAULT ''");
   }
@@ -212,6 +217,9 @@ export async function initDb() {
   const userCols = await db.all("PRAGMA table_info(users)");
   if (!userCols.some((c) => c.name === "user_uid")) {
     await db.exec("ALTER TABLE users ADD COLUMN user_uid TEXT");
+  }
+  if (!userCols.some((c) => c.name === "email")) {
+    await db.exec("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''");
   }
 
   const usersWithoutUid = await db.all("SELECT id FROM users WHERE user_uid IS NULL OR trim(user_uid) = ''");

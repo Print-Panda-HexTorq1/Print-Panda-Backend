@@ -441,7 +441,7 @@ export function createRoutes({ onQueueChanged }) {
       if (!client) return res.status(401).json({ error: "Client not found" });
 
       const token = signToken({ role: "user", userId: safeUser.id, clientId: client.id, clientUid: client.client_uid });
-      return res.json({ token, user: { id: safeUser.id, user_uid: safeUser.user_uid, username: safeUser.username }, client });
+      return res.json({ token, user: { id: safeUser.id, user_uid: safeUser.user_uid, username: safeUser.username, email: safeUser.email || "" }, client });
     } catch (err) {
       next(err);
     }
@@ -450,7 +450,7 @@ export function createRoutes({ onQueueChanged }) {
   router.get("/api/auth/me", requireUser, async (req, res, next) => {
     try {
       const db = getDb();
-      const user = await db.get("SELECT id, user_uid, username, client_id, created_at FROM users WHERE id = ?", [req.user.userId]);
+      const user = await db.get("SELECT id, user_uid, username, email, client_id, created_at FROM users WHERE id = ?", [req.user.userId]);
       const safeUser = await ensureUserUid(db, user);
       if (!safeUser) return res.status(404).json({ error: "User not found" });
       const client = await db.get("SELECT * FROM clients WHERE id = ?", [safeUser.client_id]);
@@ -464,13 +464,16 @@ export function createRoutes({ onQueueChanged }) {
     try {
       const db = getDb();
       const client = await db.get(
-        "SELECT id, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
+        "SELECT id, email, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
         [req.user.clientId]
       );
+      const user = await db.get("SELECT id, email FROM users WHERE id = ?", [req.user.userId]);
       if (!client) {
         return res.status(404).json({ error: "Shop not found" });
       }
       res.json({
+        shopEmail: client.email || "",
+        userEmail: user?.email || "",
         autoPaymentEnabled: Boolean(Number(client.auto_payment_enabled ?? 1)),
         bwPrice: Number.isFinite(Number(client.bw_price)) ? Number(client.bw_price) : Number(config.defaultBwPrice),
         colorPrice: Number.isFinite(Number(client.color_price)) ? Number(client.color_price) : Number(config.defaultColorPrice),
@@ -488,7 +491,7 @@ export function createRoutes({ onQueueChanged }) {
     try {
       const db = getDb();
       const client = await db.get(
-        "SELECT id, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
+        "SELECT id, email, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
         [req.user.clientId]
       );
       if (!client) {
@@ -515,6 +518,12 @@ export function createRoutes({ onQueueChanged }) {
       const nextPayPandaApiBase = typeof req.body?.payPandaApiBase === "string"
         ? req.body.payPandaApiBase.trim()
         : client.pay_panda_api_base;
+      const nextShopEmail = typeof req.body?.shopEmail === "string"
+        ? req.body.shopEmail.trim().toLowerCase()
+        : client.email;
+      const nextUserEmail = typeof req.body?.userEmail === "string"
+        ? req.body.userEmail.trim().toLowerCase()
+        : null;
 
       if (!Number.isFinite(nextBwPrice) || nextBwPrice < 0) {
         return res.status(400).json({ error: "Invalid B/W price" });
@@ -526,7 +535,8 @@ export function createRoutes({ onQueueChanged }) {
       await db.run(
         `UPDATE clients
          SET auto_payment_enabled = ?, bw_price = ?, color_price = ?,
-             pay_panda_app_id = ?, pay_panda_app_secret = ?, pay_panda_api_base = ?
+             pay_panda_app_id = ?, pay_panda_app_secret = ?, pay_panda_api_base = ?,
+             email = ?
          WHERE id = ?`,
         [
           nextAutoPayment,
@@ -535,15 +545,22 @@ export function createRoutes({ onQueueChanged }) {
           nextPayPandaAppId,
           nextPayPandaAppSecret,
           nextPayPandaApiBase,
+          nextShopEmail,
           req.user.clientId
         ]
       );
+      if (nextUserEmail !== null) {
+        await db.run("UPDATE users SET email = ? WHERE id = ?", [nextUserEmail, req.user.userId]);
+      }
       const updatedClient = await db.get(
-        "SELECT id, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
+        "SELECT id, email, auto_payment_enabled, bw_price, color_price, pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base FROM clients WHERE id = ?",
         [req.user.clientId]
       );
+      const updatedUser = await db.get("SELECT id, email FROM users WHERE id = ?", [req.user.userId]);
       res.json({
         ok: true,
+        shopEmail: updatedClient.email || "",
+        userEmail: updatedUser?.email || "",
         autoPaymentEnabled: Boolean(nextAutoPayment),
         bwPrice: Math.round(nextBwPrice),
         colorPrice: Math.round(nextColorPrice),

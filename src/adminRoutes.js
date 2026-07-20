@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { getDb } from "./db.js";
 import { config } from "./config.js";
 import { requireAdmin, signToken } from "./auth.js";
+import { sendDailyAnalyticsReports } from "./emailReports.js";
 import { getAnalytics } from "./queueService.js";
 import { nowIso } from "./utils.js";
 
@@ -24,6 +25,10 @@ function serializeClient(client) {
     ...safeClient,
     has_pay_panda_secret: Boolean(String(client.pay_panda_app_secret || "").trim())
   };
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 async function ensureUserUid(db, userRow) {
@@ -95,11 +100,23 @@ adminRouter.get("/analytics", async (req, res, next) => {
   }
 });
 
+// POST /api/admin/reports/daily-email?date=2026-07-20
+adminRouter.post("/reports/daily-email", async (req, res, next) => {
+  try {
+    const date = String(req.query?.date || req.body?.date || "").trim();
+    const result = await sendDailyAnalyticsReports(/^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined);
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/admin/clients
 adminRouter.post("/clients", async (req, res, next) => {
   try {
     const {
       shopName,
+      email = "",
       upiId = "",
       upiName = "",
       bwPrice = config.defaultBwPrice,
@@ -122,12 +139,13 @@ adminRouter.post("/clients", async (req, res, next) => {
     const now = nowIso();
     const result = await db.run(
       `INSERT INTO clients (
-         client_uid, shop_name, upi_id, upi_name, bw_price, color_price,
+         client_uid, shop_name, email, upi_id, upi_name, bw_price, color_price,
          pay_panda_app_id, pay_panda_app_secret, pay_panda_api_base, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         uid,
         shopName.trim(),
+        normalizeEmail(email),
         upiId.trim(),
         upiName.trim(),
         safeBwPrice,
@@ -153,6 +171,7 @@ adminRouter.put("/clients/:id", async (req, res, next) => {
     if (!client) return res.status(404).json({ error: "Client not found" });
 
     const shopName = typeof req.body.shopName === "string" ? req.body.shopName.trim() : client.shop_name;
+    const email = typeof req.body.email === "string" ? normalizeEmail(req.body.email) : client.email;
     const upiId = typeof req.body.upiId === "string" ? req.body.upiId.trim() : client.upi_id;
     const upiName = typeof req.body.upiName === "string" ? req.body.upiName.trim() : client.upi_name;
     const payPandaAppId = typeof req.body.payPandaAppId === "string" ? req.body.payPandaAppId.trim() : client.pay_panda_app_id;
@@ -172,9 +191,10 @@ adminRouter.put("/clients/:id", async (req, res, next) => {
     await db.run(
       `UPDATE clients
        SET shop_name = ?, upi_id = ?, upi_name = ?, bw_price = ?, color_price = ?,
+           email = ?,
            pay_panda_app_id = ?, pay_panda_app_secret = ?, pay_panda_api_base = ?
        WHERE id = ?`,
-      [shopName, upiId, upiName, bwPrice, colorPrice, payPandaAppId, payPandaAppSecret, payPandaApiBase, client.id]
+      [shopName, upiId, upiName, bwPrice, colorPrice, email, payPandaAppId, payPandaAppSecret, payPandaApiBase, client.id]
     );
     const updated = await db.get("SELECT * FROM clients WHERE id = ?", [client.id]);
     return res.json(serializeClient(updated));
@@ -201,7 +221,7 @@ adminRouter.get("/clients/:id/users", async (req, res, next) => {
   try {
     const db = getDb();
     const users = await db.all(
-      "SELECT id, client_id, user_uid, username, created_at FROM users WHERE client_id = ? ORDER BY created_at DESC",
+      "SELECT id, client_id, user_uid, username, email, created_at FROM users WHERE client_id = ? ORDER BY created_at DESC",
       [req.params.id]
     );
     const withUids = [];
@@ -217,7 +237,7 @@ adminRouter.get("/clients/:id/users", async (req, res, next) => {
 // POST /api/admin/clients/:id/users
 adminRouter.post("/clients/:id/users", async (req, res, next) => {
   try {
-    const { username, password } = req.body || {};
+    const { username, password, email = "" } = req.body || {};
     if (!username || typeof username !== "string" || !username.trim()) {
       return res.status(400).json({ error: "username is required" });
     }
@@ -241,11 +261,11 @@ adminRouter.post("/clients/:id/users", async (req, res, next) => {
     const hash = await bcrypt.hash(password, 10);
     const now = nowIso();
     const result = await db.run(
-      "INSERT INTO users (client_id, user_uid, username, password_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-      [client.id, userUid, username.trim(), hash, now]
+      "INSERT INTO users (client_id, user_uid, username, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [client.id, userUid, username.trim(), normalizeEmail(email), hash, now]
     );
     const user = await db.get(
-      "SELECT id, client_id, user_uid, username, created_at FROM users WHERE id = ?",
+      "SELECT id, client_id, user_uid, username, email, created_at FROM users WHERE id = ?",
       [result.lastID]
     );
     return res.status(201).json(user);

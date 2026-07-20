@@ -44,5 +44,14 @@ export const config = {
   payPandaApiBase: String(process.env.PAY_PANDA_API_BASE || "https://git-pipeline.metatronhost.in/pay-panda/api").replace(/\/+$/, ""),
   payPandaAppId,
   payPandaAppSecret,
-  payPandaRedirectUrl
+  payPandaRedirectUrl,
+  smtpHost: String(process.env.SMTP_HOST || "smtp.gmail.com").trim(),
+  smtpPort: Number(process.env.SMTP_PORT || 465),
+  smtpSecure: String(process.env.SMTP_SECURE || "true").toLowerCase() !== "false",
+  smtpUser: String(process.env.SMTP_USER || process.env.GMAIL_USER || "").trim(),
+  smtpPass: String(process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || "").trim(),
+  mailFrom: String(process.env.MAIL_FROM || process.env.SMTP_USER || process.env.GMAIL_USER || "").trim(),
+  superAdminEmail: String(process.env.SUPER_ADMIN_EMAIL || process.env.ADMIN_EMAIL || "").trim(),
+  dailyReportHour: Number(process.env.DAILY_REPORT_HOUR || 0),
+  dailyReportMinute: Number(process.env.DAILY_REPORT_MINUTE || 0)
 };

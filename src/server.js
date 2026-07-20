@@ -6,6 +6,7 @@ import { initDb } from "./db.js";
 import { config } from "./config.js";
 import { createRoutes } from "./routes.js";
 import { adminRouter } from "./adminRoutes.js";
+import { startDailyEmailReports } from "./emailReports.js";
 import { listQueues } from "./queueService.js";
 import { broadcast, startWsServer } from "./wsHub.js";
 
@@ -108,6 +109,7 @@ async function bootstrap() {
 
   const wsPort = await startWsWithFallback(config.wsPort, 0);
   console.log(`WebSocket server running on ws://localhost:${wsPort}`);
+  startDailyEmailReports();
 }
 
 bootstrap().catch((error) => {
